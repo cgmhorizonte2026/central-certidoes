@@ -1,0 +1,27 @@
+node_modules/
+data/
+tmp/
+output/
+.env
+*.log
+.runtime/
+
+# Dados privados e credenciais, inclusive fora das pastas de execução
+.env.*
+!.env.example
+*.sqlite
+*.sqlite-*
+*.db
+*.db-*
+*.pdf
+*.pem
+*.key
+*.pfx
+*.p12
+storage-state*.json
+storageState*.json
+cookies*.json
+auth-state*.json
+playwright-report/
+test-results/
+.codex/
