@@ -30,7 +30,8 @@ function municipalPortal(company) {
     selectors:{cnpj:['#pesquisaForm\\:cnpjPessoaDec\\:cnpj','input[name="pesquisaForm:cnpjPessoaDec:cnpj"]','input[alt="cnpj" i]']},
     preActions:[{name:'Selecionar Pessoa Jurídica / CNPJ',selectors:['#pesquisaForm\\:tipoPessoaDecorate\\:j_id358\\:1','input[name="pesquisaForm:tipoPessoaDecorate:j_id358"][value="J"]','label:has-text("Jurídica")'],waitMs:1800,required:true}],
     humanCaptcha:'required', captchaTimeout:600000, beforeCaptchaActions:[],
-    afterCaptchaActions:[{name:'Emitir Certidão Municipal',selectors:['#pesquisaForm\\:btnEmitir','input[name="pesquisaForm:btnEmitir"]','input[value="Emitir"]'],captureDownload:true,downloadTimeout:30000,waitMs:2000}],
+    afterCaptchaActions:[{name:'Emitir Certidão Municipal',selectors:['#pesquisaForm\\:btnEmitir','input[name="pesquisaForm:btnEmitir"]','input[value="Emitir"]'],captureDownload:true,downloadTimeout:5000,waitMs:1200}],
+    existingCertificate:{container:'form#modalReimpressaoForm',reprintSelectors:['form#modalReimpressaoForm input[value*="Reimprimir Certid" i]','form#modalReimpressaoForm input[type="submit"]','text=Reimprimir Certidão']},
     downloadButtons:['input[value*="Reimprimir Certid" i]','text=Reimprimir Certidão','text=Baixar','text=Download','text=Imprimir','text=PDF']
   };
   const preActions = code === '2305233' ? [{ name:'Abrir Certidão de Contribuinte', selectors:['a:has-text("Certidão de Contribuinte")','text=Certidão de Contribuinte'], waitMs:1500, required:true }] : [];

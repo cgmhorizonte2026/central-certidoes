@@ -225,6 +225,27 @@ async function capturePdfFromClick(page, context, selectors, timeout = 30000) {
   return null;
 }
 
+async function captureExistingCertificate(page, context, config, emit) {
+  if (!config?.container) return null;
+  let modal = null;
+  for (const scope of page.frames()) {
+    const candidate = scope.locator(config.container).first();
+    if (await candidate.isVisible().catch(() => false)) { modal = candidate; break; }
+  }
+  if (!modal) {
+    await page.waitForTimeout(1200);
+    for (const scope of page.frames()) {
+      const candidate = scope.locator(config.container).first();
+      if (await candidate.isVisible().catch(() => false)) { modal = candidate; break; }
+    }
+  }
+  if (!modal) return null;
+  const text = await modal.innerText().catch(() => '');
+  const validity = text.match(/v[aá]lida\s+at[eé]\s+(\d{2}\/\d{2}\/\d{4})/i)?.[1] || '';
+  emit({type:'existing_certificate_found',portal:'municipal',validade:validity,message:`Certidão municipal válida já existente${validity ? ` até ${validity}` : ''}. Reimprimindo o documento oficial.`});
+  return capturePdfFromClick(page, context, config.reprintSelectors || [], 30000);
+}
+
 async function extractPdfResponse(page, timeout = 12000) {
   const url = page.url();
   if (/\.pdf(?:$|[?#])/i.test(url)) {
@@ -638,6 +659,12 @@ async function runPortal({ portal, cnpj, browser, baseDir, emit }) {
     }
     emit({ type: 'after_captcha_action', portal: portal.key, action: action.name || 'ação pós-CAPTCHA', clicked });
     if (clicked) await page.waitForTimeout(action.waitMs || 2200);
+  }
+
+  if (!download && !pdfBuffer && portal.existingCertificate) {
+    const existing = await captureExistingCertificate(page, browser.context, portal.existingCertificate, emit);
+    if (existing?.download) download = existing.download;
+    if (existing?.pdfBuffer) pdfBuffer = existing.pdfBuffer;
   }
 
   if (!download && !pdfBuffer) {

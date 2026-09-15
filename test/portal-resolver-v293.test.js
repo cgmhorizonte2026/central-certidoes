@@ -16,6 +16,8 @@ test('Fortaleza selects legal entity before filling CNPJ and emitting', () => {
   assert.equal(portal.selectors.cnpj[0], '#pesquisaForm\\:cnpjPessoaDec\\:cnpj');
   assert.equal(portal.humanCaptcha, 'required');
   assert.equal(portal.afterCaptchaActions[0].selectors[0], '#pesquisaForm\\:btnEmitir');
+  assert.equal(portal.existingCertificate.container, 'form#modalReimpressaoForm');
+  assert.match(portal.existingCertificate.reprintSelectors[0], /Reimprimir/);
 });
 
 test('individual consultation selects only the requested certificate', () => {
