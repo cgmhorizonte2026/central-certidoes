@@ -282,6 +282,10 @@ async function printCertificatePageFromContext(context, cnpj, portalKey, timeout
           const isStateCert = /consultarPdf/i.test(url) || /Certid[aã]o Negativa de D[eé]bitos Estaduais/i.test(body);
           if (isStateCert && normalized.includes(digits)) return await printPageToPdf(candidate);
         }
+        if (portalKey === 'estadual-sp') {
+          const isStateCert = /certid[aã]o negativa de d[eé]bitos tribut[aá]rios/i.test(body) && !/emiss[aã]o da certid[aã]o/i.test(body);
+          if (isStateCert && normalized.includes(digits)) return await printPageToPdf(candidate);
+        }
       } catch (_) {}
     }
     await new Promise(resolve => setTimeout(resolve, 500));
@@ -662,7 +666,7 @@ async function runPortal({ portal, cnpj, browser, baseDir, emit }) {
   if (!download && !pdfBuffer) {
     pdfBuffer = await waitForPdfNavigation(page, 15000);
   }
-  if (!download && !pdfBuffer && portal.key === 'estadual-ce') {
+  if (!download && !pdfBuffer && ['estadual-ce','estadual-sp'].includes(portal.key)) {
     pdfBuffer = await printCertificatePageFromContext(browser.context, cnpj, portal.key, 20000);
     if (pdfBuffer) {
       emit({ type: 'page_printed_to_pdf', portal: portal.key, message: 'PDF gerado a partir da página oficial da certidão.' });

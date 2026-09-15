@@ -9,6 +9,14 @@ function statePortal(company) {
   const uf = String(company?.uf || '').toUpperCase(), entry = states[uf];
   if (!entry) return null;
   if (uf === 'CE') return basePortals.find(portal => portal.key === 'estadual-ce');
+  if (uf === 'SP') return {
+    key:'estadual-sp', name:'Certidão Estadual — São Paulo', shortName:'Estadual SP', url:entry[1], verifyUrl:entry[1],
+    selectors:{cnpj:['#MainContent_txtDocumento','input[name="ctl00$MainContent$txtDocumento"]']},
+    preActions:[{name:'Selecionar CNPJ',selectors:['#MainContent_cnpjradio','input[value="cnpjradio"]'],waitMs:500,required:true}],
+    humanCaptcha:'required', captchaTimeout:600000, beforeCaptchaActions:[],
+    afterCaptchaActions:[{name:'Emitir eCND',selectors:['#MainContent_btnPesquisar','input[name="ctl00$MainContent$btnPesquisar"]','input[value*="Emitir" i]'],captureDownload:true,downloadTimeout:30000,waitMs:1800}],
+    downloadButtons:['text=Baixar','text=Download','text=Imprimir','text=PDF']
+  };
   return { key:`estadual-${uf.toLowerCase()}`, name:`Certidão Estadual — ${entry[0]}`, shortName:`Estadual ${uf}`, url:entry[1], verifyUrl:entry[1], selectors, humanCaptcha:false, beforeCaptchaActions:[], afterCaptchaActions:[], downloadButtons:['text=Emitir Certidão','text=Emitir CND','text=Certidão Negativa','text=Imprimir','text=Baixar','text=Download','text=PDF'] };
 }
 
