@@ -153,6 +153,8 @@ async function lookupCompany(cnpj) {
         uf: String(r.data.uf || '').toUpperCase(),
         municipio: r.data.municipio || '',
         municipio_codigo_ibge: String(r.data.codigo_municipio_ibge || ''),
+        logradouro: String(r.data.logradouro || '').replace(/^\s*MATRIZ\s+/i, ''),
+        numero: r.data.numero || '', complemento: r.data.complemento || '', bairro: r.data.bairro || '', cep: String(r.data.cep || ''),
         fonte: 'BrasilAPI'
       };
     },
@@ -164,6 +166,8 @@ async function lookupCompany(cnpj) {
         nome_fantasia: r.data.fantasia || '',
         uf: String(r.data.uf || '').toUpperCase(),
         municipio: r.data.municipio || '',
+        logradouro: [r.data.tipo, r.data.logradouro].filter(Boolean).join(' '),
+        numero: r.data.numero || '', complemento: r.data.complemento || '', bairro: r.data.bairro || '', cep: String(r.data.cep || ''),
         fonte: 'ReceitaWS'
       };
     }
@@ -176,7 +180,7 @@ async function lookupCompany(cnpj) {
       return data;
     } catch (_) {}
   }
-  return { razao_social: '', nome_fantasia: '', uf: '', municipio: '', fonte: '' };
+  return { razao_social: '', nome_fantasia: '', uf: '', municipio: '', logradouro:'', numero:'', complemento:'', bairro:'', cep:'', fonte: '' };
 }
 
 

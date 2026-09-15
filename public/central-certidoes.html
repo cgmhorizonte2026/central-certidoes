@@ -499,6 +499,7 @@ const ORGAOS = [
 ];
 
 const state = {}; // key -> {status, validade, org}
+let companyData = {};
 // Persistência local para o histórico da Central. No localhost do Chrome não
 // existe window.storage nativo; usamos localStorage como fallback para que
 // situação, validade, código e o link do PDF arquivado sobrevivam ao recarregar.
@@ -578,7 +579,6 @@ document.getElementById('cnpj').addEventListener('input', async (e)=>{
 async function buscarNomeEmpresa(digits){
   const razaoInput = document.getElementById('razaoSocial');
   const statusEl = document.getElementById('cnpjStatus');
-  if(razaoInput.value) { atualizarImpressao(); return; }
   const placeholderOriginal = razaoInput.placeholder;
   razaoInput.placeholder = 'Buscando nome da empresa…';
   statusEl.textContent = 'CNPJ completo · buscando empresa…';
@@ -588,14 +588,13 @@ async function buscarNomeEmpresa(digits){
     if(resp.ok){
       const nome = data.razao_social || data.nome_fantasia || '';
       if(cnpjDigits() !== digits) return;
+      companyData = data;
       if(nome && !razaoInput.value){
         razaoInput.value = nome;
-        statusEl.textContent = 'CNPJ completo · empresa localizada' + (data.uf ? ' · UF ' + data.uf : '');
-        statusEl.className = 'cnpj-status ok';
-        atualizarImpressao();
-        salvarNoHistorico();
-        return;
       }
+      statusEl.textContent = 'CNPJ completo · empresa localizada' + (data.municipio ? ' · ' + data.municipio : '') + (data.uf ? '/' + data.uf : '');
+      statusEl.className = 'cnpj-status ok';
+      atualizarImpressao(); salvarNoHistorico(); window.renderDreamDashboard?.(); return;
     }
     statusEl.textContent = 'CNPJ completo · informe a razão social';
     statusEl.className = 'cnpj-status';
@@ -808,6 +807,7 @@ async function salvarNoHistorico(){
   const registro = {
     cnpj: digits,
     razaoSocial: document.getElementById('razaoSocial').value || '',
+    companyData,
     atualizadoEm: new Date().toISOString(),
     orgaos: {}
   };
@@ -830,6 +830,7 @@ async function loadEmpresaFromHistorico(digits){
     if(cnpjDigits() !== digits) return;
     const registro = JSON.parse(result.value);
     if(registro.razaoSocial) document.getElementById('razaoSocial').value = registro.razaoSocial;
+    companyData = registro.companyData || companyData;
     ORGAOS.forEach(o=>{
       const r = registro.orgaos[o.key];
       if(r){
@@ -1238,7 +1239,7 @@ body{overflow-x:hidden}
 .dash-topbar{height:78px;background:rgba(255,255,255,.94);border-bottom:1px solid #e4edf8;display:flex;align-items:center;justify-content:center;gap:14px;padding:0 28px;position:sticky;top:0;z-index:10;backdrop-filter:blur(10px)}
 .dash-search{width:min(520px,48vw);height:46px;border:1px solid #cfe0f3;background:#f8fbff;border-radius:11px;display:flex;align-items:center;padding:0 15px;gap:10px;box-shadow:inset 0 1px 2px rgba(15,55,100,.03)}.dash-search input{border:0;outline:0;background:transparent;width:100%;font-size:15px;color:#0b2448}.dash-search .ico{font-size:20px;color:#1d4f91}.dash-consult{height:46px;border:0;border-radius:9px;background:#07356e;color:#fff;font-weight:800;padding:0 29px;cursor:pointer}.dash-top-spacer{flex:1}.dash-theme{font-size:19px;padding:10px 12px}.dash-user{display:flex;align-items:center;gap:10px;margin-left:8px}.dash-avatar{width:40px;height:40px;border-radius:50%;display:grid;place-items:center;color:#fff;background:linear-gradient(135deg,#5e6ff4,#8d71f4);font-weight:800}.dash-user b{font-size:13px}.dash-user small{display:block;color:#6c7d94;font-size:11px;margin-top:2px}
 .dash-main{padding:16px 25px 24px}.dash-hero{height:142px;border:1px solid #dceaf9;border-radius:16px;background:linear-gradient(120deg,#eaf4ff 0%,#fff 58%,#eef9ff 100%);display:grid;grid-template-columns:120px 1fr 230px;align-items:center;padding:20px 28px;box-shadow:0 8px 28px rgba(21,66,112,.06);overflow:hidden}.hero-doc{width:76px;height:92px;border-radius:12px;background:linear-gradient(145deg,#5c9cfb,#2f7cf2);display:grid;place-items:center;color:white;font-size:46px;box-shadow:0 13px 25px rgba(46,122,242,.22)}.dash-hero h2{font-size:21px;margin:0 0 6px}.dash-hero p{margin:0;color:#526a89;font-size:13px}.hero-features{display:flex;gap:28px;margin-top:20px;flex-wrap:wrap}.hero-features span{font-size:12px;color:#27496f}.hero-features span:before{content:'◆';color:#2578ef;margin-right:8px}.hero-note{font-family:cursive;font-size:23px;line-height:1.1;color:#0c3d83;transform:rotate(-5deg);text-align:center}
-.consult-summary{margin-top:14px;border:1px solid #e0e9f4;background:#fff;border-radius:13px;min-height:92px;display:grid;grid-template-columns:1.1fr 1.3fr 1.1fr auto;align-items:center;padding:13px 23px;box-shadow:0 5px 18px rgba(26,66,110,.05)}.sum-block{padding-right:20px;border-right:1px solid #e6edf6}.sum-block:last-of-type{border-right:0}.sum-label{font-size:10px;color:#7890ad;text-transform:uppercase}.sum-value{margin-top:5px;font-weight:800;font-size:16px}.sum-company{font-size:14px}.sum-ok{display:inline-flex;margin-top:5px;background:#dff6e6;color:#15853f;border-radius:9px;padding:3px 8px;font-size:10px;font-weight:700}.new-query{border:1px solid #bcd9fb;background:#f7fbff;color:#0b4a96;border-radius:9px;padding:11px 18px;font-weight:700;cursor:pointer}
+.consult-summary{margin-top:14px;border:1px solid #e0e9f4;background:#fff;border-radius:13px;min-height:92px;display:grid;grid-template-columns:1fr 1.2fr 1.55fr .9fr auto;align-items:center;padding:13px 23px;box-shadow:0 5px 18px rgba(26,66,110,.05)}.sum-block{padding-right:20px;border-right:1px solid #e6edf6}.sum-block:last-of-type{border-right:0}.sum-label{font-size:10px;color:#7890ad;text-transform:uppercase}.sum-value{margin-top:5px;font-weight:800;font-size:16px}.sum-company{font-size:14px}.sum-ok{display:inline-flex;margin-top:5px;background:#dff6e6;color:#15853f;border-radius:9px;padding:3px 8px;font-size:10px;font-weight:700}.new-query{border:1px solid #bcd9fb;background:#f7fbff;color:#0b4a96;border-radius:9px;padding:11px 18px;font-weight:700;cursor:pointer}
 .stepper{display:grid;grid-template-columns:repeat(5,1fr);margin:17px 30px 20px;position:relative}.stepper:before{content:'';position:absolute;top:17px;left:9%;right:9%;height:2px;background:#2d82f3}.step{text-align:center;position:relative}.step-dot{width:34px;height:34px;margin:auto;border-radius:50%;background:#1678e9;color:#fff;display:grid;place-items:center;border:4px solid #e5f1ff;box-shadow:0 0 0 1px #8ac0ff;font-weight:900}.step.pending .step-dot{background:#dbe7f5;color:#6b7e95;box-shadow:none}.step-label{font-size:10px;font-weight:700;margin-top:5px}
 .cert-cards{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:14px}.cert-card{background:#fff;border:1px solid #dfe9f5;border-radius:13px;padding:15px 14px 12px;min-height:192px;box-shadow:0 6px 18px rgba(18,58,100,.05);display:flex;flex-direction:column}.cert-card.active{border:1.5px solid #1678e9;box-shadow:0 8px 24px rgba(22,120,233,.11)}.card-brand{display:flex;align-items:center;gap:10px}.org-icon{width:42px;height:42px;border-radius:10px;background:#eef6ff;color:#0d5fb8;display:grid;place-items:center;font-weight:900;font-size:18px}.cert-card h3{font-size:13px;margin:0}.cert-card .sub{font-size:10px;color:#71839a;margin-top:2px}.status-pill{display:inline-flex;align-items:center;gap:6px;align-self:flex-start;margin-top:14px;background:#dff6e6;color:#107838;border-radius:8px;padding:7px 9px;font-size:11px;font-weight:800}.status-pill.warn{background:#fff3d7;color:#9a6300}.status-pill.bad{background:#fde5e5;color:#aa2d2d}.status-pill.empty{background:#eef3f8;color:#6c7d92}.valid-line{margin-top:10px;font-size:11px;color:#526b8c}.details-btn{margin-top:auto;border:1px solid #b8d7fb;background:#f7fbff;color:#0b468b;border-radius:8px;padding:8px;font-weight:800;font-size:11px;cursor:pointer}
 .doc-workspace{margin-top:16px;border:1px solid #e1eaf5;background:#fff;border-radius:14px;display:grid;grid-template-columns:205px minmax(420px,1fr) 360px;min-height:345px;overflow:hidden;box-shadow:0 8px 28px rgba(16,55,100,.05)}.doc-menu{border-right:1px solid #e7edf5;padding:15px}.doc-back{font-weight:800;font-size:12px;margin-bottom:18px}.doc-tab{padding:11px 12px;border-radius:8px;font-size:12px;color:#38536f;margin-bottom:4px}.doc-tab.active{background:#dcebff;color:#0a4c9b;font-weight:800}.pdf-pane{background:#eef2f6;display:flex;flex-direction:column}.pdf-toolbar{height:47px;background:#30363a;color:#fff;display:flex;align-items:center;padding:0 14px;font-size:11px;gap:12px}.pdf-toolbar b{margin-right:auto}.pdf-frame{flex:1;background:#fff}.pdf-frame iframe{width:100%;height:100%;border:0}.pdf-placeholder{height:100%;display:grid;place-items:center;text-align:center;color:#8293a7;padding:30px}.info-pane{padding:15px;border-left:1px solid #e7edf5}.info-pane h4{font-size:13px;margin:0 0 16px}.info-row{display:flex;justify-content:space-between;gap:18px;padding:8px 0;font-size:11px}.info-row strong{text-align:right}.info-actions{margin-top:12px;display:grid;grid-template-columns:1fr 1fr;gap:8px}.info-actions a,.info-actions button{border:1px solid #0e5fc3;border-radius:8px;background:#fff;color:#0b4d9a;font-weight:800;padding:10px;font-size:11px;text-decoration:none;text-align:center;cursor:pointer}.info-actions .primary{grid-column:1/-1;background:#073a78;color:#fff;border-color:#073a78}
@@ -1278,7 +1279,7 @@ body{overflow-x:hidden}
       </div>
       <main class="dash-main">
         <section class="dash-hero"><div class="hero-doc">⌕</div><div><h2>Emita e gerencie certidões de forma automática</h2><p>Conecte-se aos principais órgãos, consulte a situação fiscal e armazene os documentos com segurança.</p><div class="hero-features"><span>Processo automático</span><span>Dados seguros</span><span>Histórico organizado</span></div></div><div class="hero-note">Mais controle<br>para uma gestão<br>mais eficiente.</div></section>
-        <section class="consult-summary"><div class="sum-block"><div class="sum-label">CNPJ CONSULTADO</div><div class="sum-value" id="sumCnpj">—</div></div><div class="sum-block"><div class="sum-label">EMPRESA</div><div class="sum-value sum-company" id="sumEmpresa">—</div><div class="sum-ok" id="sumStatus">● Consulta pronta</div></div><div class="sum-block"><div class="sum-label">DATA DA CONSULTA</div><div class="sum-value" id="sumData">—</div></div><button class="new-query" id="newQuery">↻ Nova consulta</button></section>
+        <section class="consult-summary"><div class="sum-block"><div class="sum-label">CNPJ CONSULTADO</div><div class="sum-value" id="sumCnpj">—</div></div><div class="sum-block"><div class="sum-label">EMPRESA</div><div class="sum-value sum-company" id="sumEmpresa">—</div><div class="sum-ok" id="sumStatus">● Consulta pronta</div></div><div class="sum-block"><div class="sum-label">ENDEREÇO · MUNICÍPIO/UF</div><div class="sum-value" id="sumEndereco" style="font-size:12px;line-height:1.45">—</div></div><div class="sum-block"><div class="sum-label">DATA DA CONSULTA</div><div class="sum-value" id="sumData">—</div></div><button class="new-query" id="newQuery">↻ Nova consulta</button></section>
         <section class="dash-runbar" id="dashRunbar">
           <button class="dash-run-btn primary" id="dashStart">▶ Iniciar consultas</button>
           <button class="dash-run-btn secondary" id="dashResume" disabled>✓ Continuar</button>
@@ -1300,7 +1301,7 @@ body{overflow-x:hidden}
     document.getElementById('dashStart').onclick=startLegacy;
     document.getElementById('dashResume').onclick=()=>document.getElementById('btnContinuar')?.click();
     document.getElementById('dashStop').onclick=()=>document.getElementById('btnParar')?.click();
-    document.getElementById('newQuery').onclick=()=>{d.value='';old.value='';old.dispatchEvent(new Event('input',{bubbles:true}));document.getElementById('razaoSocial').value='';resetFormulario();selectedKey='federal';render();d.focus();};
+    document.getElementById('newQuery').onclick=()=>{d.value='';old.value='';old.dispatchEvent(new Event('input',{bubbles:true}));document.getElementById('razaoSocial').value='';companyData={};resetFormulario();selectedKey='federal';render();d.focus();};
   }
   function syncRunControls(){
     const legacyStart=document.getElementById('btnConsultarTodas');
@@ -1323,9 +1324,11 @@ body{overflow-x:hidden}
     syncRunControls();
     const oldCnpj=document.getElementById('cnpj')?.value||''; const company=document.getElementById('razaoSocial')?.value||'';
     document.getElementById('sumCnpj').textContent=fmtCnpj(oldCnpj)||'—'; document.getElementById('sumEmpresa').textContent=company||'Empresa consultada'; document.getElementById('sumData').textContent=new Date().toLocaleString('pt-BR',{dateStyle:'short',timeStyle:'short'});
+    const address=[companyData.logradouro,companyData.numero,companyData.complemento,companyData.bairro].filter(Boolean).join(', '); const city=[companyData.municipio,companyData.uf].filter(Boolean).join('/'); const cep=companyData.cep?`CEP ${String(companyData.cep).replace(/\D/g,'').replace(/^(\d{5})(\d{3})$/,'$1-$2')}`:''; document.getElementById('sumEndereco').textContent=[address,city,cep].filter(Boolean).join(' · ')||'Endereço não localizado';
     const keys=['federal','fgts','trabalhista','ceara','municipal'];
     const step=document.getElementById('dashStepper');step.innerHTML=keys.map(k=>{const done=state?.[k]?.status;return `<div class="step ${done?'':'pending'}"><div class="step-dot">${done?'✓':'·'}</div><div class="step-label">${ORG_META[k].name}</div></div>`}).join('');
-    const cards=document.getElementById('dashCards');cards.innerHTML=keys.map(k=>{const s=state?.[k]||{};const [label,cl]=statusInfo(s.status);return `<article class="cert-card ${k===selectedKey?'active':''}" data-k="${k}"><div class="card-brand"><div class="org-icon">${ORG_META[k].icon}</div><div><h3>${ORG_META[k].name}</h3><div class="sub">${ORG_META[k].sub}</div></div></div><div class="status-pill ${cl==='ok'?'':cl}">● ${label}</div><div class="valid-line">▣ &nbsp; ${s.validade?'Válida até '+fmtDate(s.validade):'Validade não informada'}</div><button class="details-btn">Ver detalhes &nbsp;→</button></article>`}).join('');
+    const validityInfo=iso=>{if(!iso)return ['Validade não informada','empty'];const today=new Date();today.setHours(0,0,0,0);const expires=new Date(iso+'T00:00:00');const days=Math.ceil((expires-today)/86400000);if(days<0)return ['Vencida','bad'];if(days===0)return ['Alerta: vence hoje','bad'];if(days<=5)return [`Alerta: vence em ${days} dia${days===1?'':'s'}`,'bad'];if(days<=7)return [`Atenção: vence em ${days} dias`,'warn'];return [`Válida por mais ${days} dias`,'ok'];};
+    const cards=document.getElementById('dashCards');cards.innerHTML=keys.map(k=>{const s=state?.[k]||{};const [label,cl]=statusInfo(s.status);const [validity,vcl]=validityInfo(s.validade);return `<article class="cert-card ${k===selectedKey?'active':''}" data-k="${k}"><div class="card-brand"><div class="org-icon">${ORG_META[k].icon}</div><div><h3>${ORG_META[k].name}</h3><div class="sub">${ORG_META[k].sub}</div></div></div><div class="status-pill ${cl==='ok'?'':cl}">● ${label}</div><div class="status-pill ${vcl==='ok'?'':vcl}" style="margin-top:7px">◷ ${validity}</div><div class="valid-line">▣ &nbsp; ${s.validade?'Validade: '+fmtDate(s.validade):'Validade não informada'}</div><button class="details-btn">Ver detalhes &nbsp;→</button></article>`}).join('');
     cards.querySelectorAll('.cert-card').forEach(el=>{el.tabIndex=0;el.setAttribute('role','button');const select=()=>{selectedKey=el.dataset.k;render();window.centralShowTab?.('Documento');};el.onclick=select;el.onkeydown=e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();select();}};});
     const s=state?.[selectedKey]||{}; const meta=ORG_META[selectedKey]; const [label,cl]=statusInfo(s.status); const url=s.pdfUrl||''; const viewUrl=s.viewUrl||url; const downloadUrl=s.downloadUrl||url;
     document.getElementById('pdfTitle').textContent=s.pdfNome||({federal:'CND FEDERAL.pdf',fgts:'CRF FGTS.pdf',trabalhista:'CND TRABALHISTA.pdf',ceara:'CND ESTADUAL.pdf',municipal:'CND MUNICIPAL.pdf'}[selectedKey]);
