@@ -6,7 +6,7 @@ const pdfParse = require('pdf-parse');
 const { BrowserManager } = require('./automation/browser');
 const { runPortal } = require('./automation/portalRunner');
 const portals = require('./config/portals');
-const { portalsForCompany } = require('./config/portalResolver');
+const { portalsForCompany, portalForCertificate } = require('./config/portalResolver');
 
 const app = express();
 const PORT = process.env.PORT || 3030;
@@ -360,7 +360,16 @@ app.post('/api/session', async (req, res) => {
     events: []
   });
   activeSessionId = id;
-  const sessionPortals = portalsForCompany(company);
+  let sessionPortals = portalsForCompany(company);
+  const certificateKey = String(req.body.certificateKey || '');
+  if (certificateKey) {
+    const selectedPortal = portalForCertificate(company, certificateKey);
+    if (!selectedPortal) {
+      activeSessionId = null; sessions.delete(id);
+      return res.status(400).json({ error:'O portal desta certidão não foi identificado para a empresa consultada.' });
+    }
+    sessionPortals = [selectedPortal];
+  }
   sessions.get(id).portals = sessionPortals;
   res.json({ sessionId: id, company, portals: sessionPortals.map(p => ({ key: p.key, name: p.name })) });
   runSession(id).catch(err => emit(id, { type: 'error', message: err.message }));

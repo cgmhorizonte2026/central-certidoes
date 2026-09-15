@@ -41,4 +41,8 @@ function portalsForCompany(company) {
   return [...basePortals.filter(portal => !portal.key.startsWith('estadual-')), statePortal(company), municipalPortal(company)].filter(Boolean);
 }
 
-module.exports = { portalsForCompany, statePortal, municipalPortal };
+function portalForCertificate(company, certificateKey) {
+  return portalsForCompany(company).find(portal => (portal.key.startsWith('estadual-') ? 'ceara' : portal.key) === certificateKey) || null;
+}
+
+module.exports = { portalsForCompany, portalForCertificate, statePortal, municipalPortal };
