@@ -1,94 +1,77 @@
-# Central de Certidões V3
+# Central de Certidões v2.9.3.2
 
-Sistema local para controle documental de prestadoras. Consulta CNPJ, determina UF e município, seleciona portais, guarda PDFs, registra evidências e gera relatórios persistentes. O projeto original na unidade E: foi preservado.
+Correção funcional baseada no ZIP v2.9.3.1. Os arquivos automation/portalRunner.js, automation/browser.js e config/portals.js permanecem intactos. Não foram desenvolvidas novas automações.
 
-## Abrir neste computador
+## Instalação para teste
+1. Encerre o servidor antigo sem apagar sua pasta.
+2. Extraia este ZIP em uma nova pasta e execute INICIAR-CENTRAL.bat. Na primeira execução, o iniciador instala as dependências npm caso necessário.
+3. Abra http://localhost:3030 no MESMO navegador e endereço usados anteriormente; o histórico e as conferências existentes são vinculados à origem do navegador.
+4. Informe o CNPJ. Consultar carrega os registros; Iniciar consultas mantém a automação existente.
 
-1. Execute `Iniciar-Central.cmd` nesta pasta e mantenha a janela aberta.
-2. Acesse **http://127.0.0.1:3030**.
-3. O cadastro público está desativado. Se ainda não houver usuário, execute `Criar-Administrador.cmd` no computador e informe nome e senha (mínimo 12 caracteres). A senha não é exibida nem passada como argumento de processo. Depois entre e use **Administração > Usuários**.
+PDFs permanentes continuam em %LOCALAPPDATA%\CentralCertidoes, ou no caminho configurado em CENTRAL_CERTIDOES_STORAGE. Este pacote não contém PDFs de empresas, dados reais nem perfil do navegador.
 
-Dependências já copiadas do projeto original para este ambiente. Em outro computador, instale Node.js 24 ou superior e Microsoft Edge, execute `npm ci` e depois `npm start`. Alternativamente, use Chromium com `npx playwright install chromium`. `BROWSER_CHANNEL=chrome` seleciona Chrome.
+## Correções
+- Clique em qualquer parte do card ou em Ver detalhes seleciona o documento e seus dados.
+- Visualização PDF estável, com páginas renderizadas por PDF.js e leitor nativo como alternativa; abrir/imprimir e baixar disponíveis.
+- Envio manual arquiva os bytes do PDF por CNPJ e tipo de certidão, com identificador único. Substituir preserva a cópia anterior no armazenamento.
+- Edição dos dados mantém a associação ao PDF; atualização periódica não sobrescreve edições do mesmo documento.
+- Histórico e Empresas listam registros locais e empresas com documentos no arquivo permanente.
+- Relatórios gera a conferência das cinco certidões, incluindo pendentes, com impressão/salvamento pelo navegador. Não declara extração direta de documentos manuais.
+- Configurações mostra armazenamento e permite editar a razão social da empresa atual.
+- Abas Dados extraídos, Autenticidade e Observações funcionais. Observações isoladas por CNPJ e certidão.
+- Nova consulta limpa os documentos exibidos. Respostas atrasadas da busca de empresa e do arquivo não atravessam CNPJs.
 
-O servidor escuta exclusivamente em `127.0.0.1`. Não exponha essa instalação na internet nem mude o bind para rede compartilhada: a arquitetura é local e não inclui implantação HTTPS ou gestão de usuários de equipe.
+## Anexos da versão anterior
+A v2.9.3.1 não salvava o conteúdo dos PDFs enviados manualmente: guardava apenas nome e dados extraídos. Arquivos já arquivados pelo servidor são reutilizados. Quando houver somente nome/dados e nenhum PDF, reenvie o original uma vez pelo card correto. Não há como reconstruir um PDF a partir de seu nome.
 
-## Uso
+## Roteiro de conferência
+- Abra uma empresa antiga e confira cada um dos cinco cards.
+- Anexe PDFs em cards distintos, alterne, edite código/validade e recarregue a página.
+- Registre observações em dois cards e confirme o isolamento.
+- Abra Histórico, Empresas, Relatórios e Configurações.
+- Imprima o relatório e um PDF de certidão.
+- Use Nova consulta e confira que o documento anterior não permanece.
 
-1. Informe o CNPJ. Os dígitos verificadores são conferidos, inclusive para o formato alfanumérico. A consulta cadastral usa BrasilAPI, Minha Receita ou ReceitaWS, registrando a fonte utilizada.
-2. A UF e o município são confrontados com a base IBGE embarcada. O sistema possui referências das 27 UFs e 5.571 municípios, que **não equivalem a 5.571 integrações homologadas**.
-3. Emita uma certidão ou use **Consultar todas**. O robô executa uma sessão isolada sem janela externa, tenta preencher e emitir onde reconhece os controles. Conclua CAPTCHA e campos adicionais pelo botão **Abrir janela interativa**, dentro da Central. **Concluir e registrar evidências** salva a tela e prossegue na fila.
-4. PDFs baixados pelos hosts cadastrados são capturados. PDFs recebidos da prestadora também podem ser anexados. O original é preservado; nova anexação cria outra versão.
-5. Use **Conferir PDF** para abrir a consulta de autenticidade e obter a referência oficial. Se o órgão devolver o mesmo PDF, o sistema registra a igualdade exata por SHA-256. Se devolver outro arquivo, ou apenas uma página sem interpretação homologada, a autenticidade permanece inconclusiva. Captura de tela e observação ficam na trilha.
-6. Gere o relatório PDF e baixe o comprovante JSON. Cada relatório é um retrato imutável pela interface: mudanças posteriores exigem novo relatório. **Conferir integridade** compara os arquivos com os hashes armazenados.
+A extração automática pode não ler PDFs digitalizados ou protegidos. O arquivo ainda é armazenado, e os dados podem ser preenchidos na aba Dados extraídos. PDF.js e as fontes do layout usam os mesmos serviços externos da versão anterior; o leitor nativo serve como alternativa para a visualização.
 
-## Descoberta municipal na primeira consulta
 
-São Paulo, Fortaleza, Campinas e Horizonte têm referências iniciais. Para outra localidade, a consulta procura o site governamental do município pelo código IBGE e tenta localizar links de certidão tributária. O sistema salva a origem dessa descoberta para reutilizar com outras empresas.
+## v2.9.3.3 — continuidade da fila
+A Central tenta Federal, FGTS, Trabalhista e Estadual nessa ordem. Falhas são registradas e a fila continua. O resultado final informa pendências, sem considerar documentos antigos como emitidos nesta consulta. A Municipal permanece manual. A espera de CAPTCHA da Federal fica limitada a 2 minutos (outras esperas do portal possuem seus próprios limites). O botão Parar continua encerrando a fila. Nenhum seletor de emissão foi alterado.
 
-Uma descoberta não é uma homologação. Se a fonte estiver indisponível, não houver correspondência ou o portal usar fornecedor terceirizado, a interface mantém a pendência e permite cadastrar o serviço oficial. A conferência não recebe confirmação automática com um link apenas descoberto. Serviços terceirizados exigem cadastro técnico com evidência do vínculo oficial.
+## v2.9.3.4
+- Recuperação do PDF Federal na pasta exclusiva da emissão se download.saveAs falhar.
+- Busca de CNPJ e botões também dentro de frames, com seletores adicionais.
+- Preenchimento manual assistido se o CNPJ do FGTS/TST não for localizado.
+- Trabalhista aguarda o usuário preencher o CAPTCHA e clicar em Continuar na Central. Não resolve caracteres automaticamente.
+- Reconexão do gerenciador quando a conexão anterior com Chrome foi encerrada.
 
-## Regras de confiança
+Validação: sintaxe, recuperação na pasta exclusiva, preenchimento em frame e bloqueio até Continuar passaram. A emissão real completa de FGTS e Trabalhista ainda depende de teste no portal. O PDF Federal da consulta reportada foi recuperado e validado no painel.
 
-- Ler “negativa” no PDF não prova autenticidade. “Irregular” nunca é tratado como “regular”.
-- Um PDF sem CNPJ correspondente, tipo reconhecido ou validade explícita permanece pendente.
-- Vencimento é recalculado na data de consulta em horário de Brasília. A extração não inventa uma validade com base em qualquer data existente no texto.
-- “PDF idêntico ao obtido no portal oficial” descreve uma comparação de bytes em consulta registrada; não é validação de assinatura ICP-Brasil ou garantia jurídica absoluta.
-- Reconsultar é necessário para atualizar a conferência em outro dia. O relatório identifica a data efetiva da comparação.
-- Resposta ausente, CAPTCHA, erro, PDF diferente e município sem integração não resultam em aprovação.
-- O painel nunca decide pela liberação de pagamento. A análise documental é parte do processo de controle.
+## v2.9.3.5
+FGTS: fluxo específico Consultar -> link do CRF -> impressão da página oficial em PDF, validando o CNPJ e os campos do certificado antes de salvar.
+Trabalhista: endereço direto do formulário oficial, campo cpfCnpj e botão botao-emitir; CAPTCHA preenchido pelo usuário.
+Estadual: seleção CNPJ antes de preencher codigoDevedor e ação Pesquisar antes da espera de CAPTCHA.
+Validação: sequência FGTS e gravação testadas com simulação; espera humana, recuperação Federal e preenchimento em frame testados. A navegação real até o certificado HTML FGTS foi confirmada. Emissão completa TST/Estadual e impressão do FGTS pela automação ainda dependem de teste real.
 
-## Dados e segurança
+## v2.9.3.6
+- Trabalhista: downloads passam a usar pasta controlada por portal, permitindo recuperar o PDF quando o Playwright perde o arquivo temporário.
+- Estadual CE: a seleção de CNPJ agora é obrigatória e verificada antes de pesquisar, evitando avanço com o formulário em estado inválido.
+- Interface: o painel passa a priorizar o evento arquivado definitivo (pdf_archived/pdf_parsed) para exibir o PDF correto no card selecionado.
+- Recuperação local: CNDT da última consulta de teste validada pelo CNPJ e anexada ao arquivo permanente da Central.
 
-Dados persistem em `data/central.sqlite`; arquivos e evidências em `data/files`, `data/evidence` e `data/reports`. `data/audit.key` autentica os registros e a cadeia de eventos. Não há armazenamento dos PDFs em localStorage, nem exposição de diretórios por URL.
+## v2.9.3.7
+- FGTS: depois de abrir o certificado, a Central agora aciona o botão Visualizar e só arquiva o PDF real retornado por essa etapa.
+- Estadual CE: captura ampliada para links, botões e imagens de PDF na coluna Ações, com recuperação pela pasta controlada quando o Chrome baixar sem disparar evento Playwright.
 
-Senhas usam scrypt; a sessão local usa cookie HttpOnly e SameSite Strict, proteção de origem e token CSRF. Há limite de tentativas de login. Administradores cadastram órgãos e usuários, alteram perfis e bloqueiam contas. Operadores não podem administrar cadastros. Alterações de senha, perfil ou bloqueio revogam as sessões do usuário. O último administrador ativo não pode ser bloqueado ou rebaixado. O nome identifica a conta usada; não equivale a assinatura digital da pessoa.
+## v2.9.3.8
+- FGTS: se o botão Visualizar abrir a tela de impressão sem download capturável, a Central gera o PDF da própria página final do certificado.
+- Estadual CE: quando o portal abre a certidão como página HTML consultarPdf, a Central imprime essa página oficial em PDF e para de clicar em múltiplos ícones.
+- Trabalhista: reforçada a recuperação pela pasta controlada quando uma resposta intermediária inválida chega antes do PDF real.
 
-Para backup, pare o servidor e copie a pasta **data inteira**, incluindo banco, arquivos, relatórios e chave, para local protegido. Restaurar exige o conjunto completo. Perder a chave invalida a conferência dos registros. Não sincronize um SQLite aberto por simples cópia de arquivos.
+## v2.9.3.9
+- FGTS: adicionada captura pelo botão real de impressão `mainForm:btImprimir4`, que chama `Imprimir()` no portal da Caixa.
 
-Hashes/HMAC detectam alterações quando a chave está preservada. Quem controla o computador e a chave pode reconstruir registros. Esta versão não usa timestamp externo certificado nem armazenamento WORM externo. As datas são do relógio do computador servidor.
-
-## Verificação executada
-
-Execute `npm test` ou `node --test test/*.test.js`.
-
-Os testes cobrem CNPJ numérico/alfanumérico, classificação conservadora, datas inválidas, documento vencido, UF/município/DF/SP, origens HTTPS, descoberta municipal, autenticação/CSRF, upload, comparação de PDF, geração de relatório, persistência e alteração de banco/arquivos.
-
-O teste de comparação usa uma resposta **sintética**, explicitamente marcada como teste, para verificar a lógica. Não demonstra emissão real por todos os órgãos. Foi realizada consulta cadastral real de um CNPJ público para testar o roteamento do DF. Nenhuma prestadora foi declarada regular como resultado desses testes.
-
-O relatório de teste fica em `tmp/pdfs/relatorio-teste.pdf`, sem valor para processo de pagamento.
-
-## Limites de entrega
-
-A automação preenche e envia formulários reconhecidos e acompanha as próximas etapas. Há adaptações específicas para Receita Federal, Ceará, Distrito Federal, TST e Fortaleza, além de preenchimento por identificação de campos nos demais portais. A emissão e a autenticidade de todos os estados e municípios não estão homologadas. A integração pode parar em páginas de serviços, CAPTCHAs ou sistemas de terceiros. Não há validação criptográfica de assinatura digital nem carimbo de tempo externo. Antes de uso decisório, valide o fluxo real de cada órgão atendido com documentos e responsáveis do processo.
-
-Fontes e cobertura: [docs/FONTES-E-COBERTURA.md](docs/FONTES-E-COBERTURA.md).
-
-## Estrutura
-
-- `server.js`, `lib/app.js`: servidor local e API autenticada.
-- `lib/company.js`, `config/municipalities.json`: consulta cadastral e jurisdição.
-- `config/registry.js`, `lib/discovery.js`: diretório de órgãos e descoberta municipal.
-- `automation/sessions.js`: navegador, captura e evidências.
-- `lib/domain.js`, `lib/certificates.js`: leitura, classificação e comparação.
-- `lib/store.js`: banco e integridade.
-- `lib/report.js`: relatório e comprovante.
-- `public/`: interface em português, sem scripts externos.
-- `scripts/build-geography.js`: atualização explícita da base IBGE; indisponibilidade do Wikidata não remove o diretório IBGE.
-
-## Reutilização e emissão
-
-Ao solicitar emissão, o backend reutiliza o último PDF obtido do portal para aquela empresa e tipo, se o arquivo estiver íntegro, o CNPJ e o tipo forem reconhecidos, a classificação for identificada e houver **5 dias ou mais** de vigência restantes. Abaixo de 5 dias, realiza nova tentativa de emissão. PDFs anexados sem procedência oficial não são reutilizados automaticamente. A reutilização não renova a data da conferência de autenticidade. Arquivos de conteúdo idêntico compartilham o mesmo armazenamento.
-
-A sessão de emissão identifica desafios e oferece **Abrir janela interativa**, **Ver página do órgão** e **Continuar emissão**. A interação ocorre no painel da Central: clique na imagem para selecionar campos e botões e use a caixa de texto para digitar. O navegador do robô funciona sem janela externa. O robô tenta o Buster nos desafios reCAPTCHA com áudio compatíveis e retoma a emissão ao identificar a resposta. Desafios não resolvidos continuam disponíveis na janela do órgão. Campos com máscara recebem eventos de digitação. O TST abre diretamente o serviço CNDT. Mensagens de falha da Receita são exibidas como impedimento, não como emissão concluída. Ao capturar um PDF, o sistema conclui a sessão automaticamente e registra as evidências possíveis. Páginas sem CAPTCHA não recebem instrução afirmando que ele foi localizado.
-
-## Administração
-
-**Administração > Órgãos** cadastra unidades administrativas e emissores. Emissores federais, estaduais e municipais podem ter seus links de emissão e autenticidade administrados no banco. Alterações preservam a trilha. O cadastro institucional não cria isolamento de dados entre órgãos; esta instalação continua sendo uma base compartilhada local.
-
-### Verificação da automação em 09/09/2026
-
-Foram inspecionados os formulários oficiais da Receita, Ceará, DF, TST e Fortaleza. A tentativa real na Receita passou pela validação do CNPJ após corrigir a digitação com máscara, mas o serviço retornou erro 106 e não entregou PDF. Ceará, TST e Fortaleza apresentam desafios de segurança. O acesso de teste ao FGTS foi redirecionado para verificação externa. Isso não comprova emissão integral nesses portais. A suíte automatizada usa formulários sintéticos para testar preenchimento, navegação, espera por CAPTCHA, retomada sem duplicar solicitação e bloqueio de páginas não confiáveis.
-
-## Robô com Buster
-
-A instalação inclui navegador Chromium dedicado e Buster 3.4.0 para tentativa gratuita por áudio, com logs, limite de tentativas e retorno assistido. PDFs ficam em `data/files/CNPJ/tipo/sha256.pdf`. Veja [configuração, instalação e limites](docs/ROBO-E-CAPTCHA.md). Na tela: Consultar, Validar e Visualizar / imprimir.
+## v2.9.3.10
+- A fila verifica o arquivo permanente antes de abrir os portais. Certidões com PDF existente e validade vigente são reutilizadas e marcadas como já válidas.
+- Somente certidões vencidas, sem validade identificada ou ausentes entram na emissão automática.
+- A consulta cadastral passa a guardar UF/município quando disponível. A Estadual do Ceará só roda para CNPJ com UF `CE`; para outra UF, ou UF não identificada, a etapa estadual fica pendente para evitar emissão do estado errado.

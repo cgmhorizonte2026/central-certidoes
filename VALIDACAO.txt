@@ -1,0 +1,13 @@
+v2.9.3.3 — Validação da continuidade da fila
+
+Testes automatizados com executor e portais simulados:
+PASS: falha Federal seguida por FGTS, Trabalhista e Estadual.
+PASS: falhas múltiplas não interrompem a fila.
+PASS: sucesso das quatro etapas termina como done.
+PASS: falhas terminam como partial, sem marcar etapa falhada como sucesso.
+PASS: Parar impede iniciar a próxima etapa.
+PASS: falha no arquivamento não gera portal_done.
+PASS: sintaxe do servidor e scripts inline.
+
+portalRunner.js, browser.js e config/portals.js preservados da v2.9.3.2.
+Não houve teste de emissão real. A repetição do teste de navegador não pôde iniciar porque a dependência Playwright da instalação anterior não foi encontrada. Os testes de interface da v2.9.3.2 constam da entrega anterior; não são apresentados como executados novamente nesta versão.

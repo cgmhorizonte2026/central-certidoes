@@ -1,14 +1,12 @@
 {
   "name": "central-certidoes-v2",
-  "version": "3.0.0",
+  "version": "2.9.3.11",
   "private": true,
-  "description": "Central de Certidões - consulta cadastral, captura assistida e evidências de conferência",
-  "engines": { "node": ">=24.0.0" },
+  "description": "Central de Certidões V2 - automação assistida com Playwright",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "dev": "node server.js",
-    "test": "node --test test/*.test.js"
+    "dev": "node server.js"
   },
   "dependencies": {
     "express": "^4.21.2",

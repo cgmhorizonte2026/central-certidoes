@@ -1,0 +1,1371 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Central de Certidões</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Lora:wght@500;600;700&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500;600&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<style>
+  :root{
+    --paper:#FAF8F2;
+    --paper-line:#E4DCC8;
+    --ink:#1F2A3C;
+    --ink-soft:#5B6B7F;
+    --gold:#A6822C;
+    --green:#1F6F4A;
+    --green-bg:#E9F3EC;
+    --red:#B23A3A;
+    --red-bg:#FBEAEA;
+    --amber:#8A6D1E;
+    --amber-bg:#F6EFDD;
+    --gray-bg:#EEECE5;
+  }
+  *{box-sizing:border-box;}
+  body{
+    margin:0;
+    background:var(--paper);
+    color:var(--ink);
+    font-family:'Inter',sans-serif;
+    -webkit-font-smoothing:antialiased;
+  }
+  .wrap{
+    max-width:900px;
+    margin:0 auto;
+    padding:48px 28px 80px;
+  }
+  header.top{
+    display:flex;
+    justify-content:space-between;
+    align-items:flex-end;
+    border-bottom:2px solid var(--ink);
+    padding-bottom:18px;
+    margin-bottom:36px;
+    gap:16px;
+  }
+  h1{
+    font-family:'Lora',serif;
+    font-weight:600;
+    font-size:28px;
+    margin:0 0 6px;
+    letter-spacing:.2px;
+  }
+  .subtitle{
+    color:var(--ink-soft);
+    font-size:14.5px;
+    max-width:520px;
+    line-height:1.5;
+  }
+  .print-btn{
+    border:1px solid var(--ink);
+    background:transparent;
+    color:var(--ink);
+    font-family:'Inter',sans-serif;
+    font-size:13.5px;
+    font-weight:600;
+    padding:9px 16px;
+    border-radius:3px;
+    cursor:pointer;
+    white-space:nowrap;
+  }
+  .print-btn:hover{background:var(--ink);color:var(--paper);}
+
+  .cnpj-block{
+    background:#fff;
+    border:1px solid var(--paper-line);
+    border-left:4px solid var(--gold);
+    border-radius:4px;
+    padding:22px 24px;
+    margin-bottom:32px;
+  }
+  .cnpj-block label{
+    display:block;
+    font-size:13px;
+    font-weight:600;
+    color:var(--ink-soft);
+    margin-bottom:8px;
+  }
+  .cnpj-row{
+    display:flex;
+    gap:12px;
+    flex-wrap:wrap;
+    align-items:center;
+  }
+  input#cnpj{
+    font-family:'IBM Plex Mono',monospace;
+    font-size:19px;
+    letter-spacing:.5px;
+    border:1px solid #C9C2AE;
+    border-radius:3px;
+    padding:11px 14px;
+    width:260px;
+    background:var(--paper);
+    color:var(--ink);
+  }
+  input#cnpj:focus{outline:2px solid var(--gold);outline-offset:1px;}
+  .cnpj-status{
+    font-size:13px;
+    color:var(--ink-soft);
+  }
+  .cnpj-status.ok{color:var(--green);font-weight:600;}
+  .cnpj-status.bad{color:var(--red);font-weight:600;}
+
+  h2.section-title{
+    font-family:'Lora',serif;
+    font-size:18px;
+    font-weight:600;
+    margin:0 0 4px;
+  }
+  .section-sub{
+    color:var(--ink-soft);
+    font-size:13.5px;
+    margin-bottom:18px;
+  }
+
+  .grid{
+    display:grid;
+    grid-template-columns:1fr 1fr;
+    gap:16px;
+    margin-bottom:44px;
+  }
+  @media (max-width:640px){ .grid{grid-template-columns:1fr;} }
+
+  .card{
+    background:#fff;
+    border:1px solid var(--paper-line);
+    border-radius:4px;
+    overflow:hidden;
+    display:flex;
+    flex-direction:column;
+  }
+  .card-head{
+    padding:16px 18px 12px;
+    border-bottom:1px solid var(--paper-line);
+  }
+  .card-eyebrow{
+    font-size:11.5px;
+    color:var(--ink-soft);
+    font-weight:600;
+    margin-bottom:2px;
+  }
+  .card-title{
+    font-family:'Lora',serif;
+    font-size:17px;
+    font-weight:600;
+  }
+  .card-body{
+    padding:14px 18px 18px;
+    display:flex;
+    flex-direction:column;
+    gap:10px;
+    flex:1;
+  }
+  .btn-row{display:flex;gap:8px;flex-wrap:wrap;}
+  .btn{
+    font-family:'Inter',sans-serif;
+    font-size:13px;
+    font-weight:600;
+    padding:8px 12px;
+    border-radius:3px;
+    cursor:pointer;
+    border:1px solid var(--ink);
+    background:var(--ink);
+    color:#fff;
+    text-decoration:none;
+    display:inline-flex;
+    align-items:center;
+    gap:6px;
+  }
+  .btn.secondary{
+    background:transparent;
+    color:var(--ink);
+  }
+  .btn:hover{opacity:.85;}
+
+  .dropzone{
+    border:1.5px dashed #C9C2AE;
+    border-radius:4px;
+    padding:14px;
+    text-align:center;
+    font-size:12.5px;
+    color:var(--ink-soft);
+    cursor:pointer;
+    background:var(--paper);
+  }
+  .dropzone.hasfile{border-color:var(--green);color:var(--green);background:var(--green-bg);}
+  .dropzone.reading{border-color:var(--gold);color:var(--amber);}
+  .dropzone input{display:none;}
+
+  .manual-row{
+    display:flex;
+    gap:8px;
+    align-items:center;
+    flex-wrap:wrap;
+  }
+  .manual-row select, .manual-row input[type=date]{
+    font-family:'Inter',sans-serif;
+    font-size:12.5px;
+    padding:6px 8px;
+    border:1px solid #C9C2AE;
+    border-radius:3px;
+    background:#fff;
+    color:var(--ink);
+  }
+  .manual-label{font-size:11.5px;color:var(--ink-soft);width:100%;}
+
+  /* consolidated panel */
+  #consolidado{margin-top:8px;}
+  .banner{
+    border-radius:4px;
+    padding:16px 20px;
+    font-family:'Lora',serif;
+    font-size:16px;
+    font-weight:600;
+    margin-bottom:20px;
+    border:1px solid transparent;
+  }
+  .banner.green{background:var(--green-bg);color:var(--green);border-color:#bfdfcd;}
+  .banner.red{background:var(--red-bg);color:var(--red);border-color:#e9c4c4;}
+  .banner.gray{background:var(--gray-bg);color:var(--ink-soft);border-color:var(--paper-line);}
+
+  .result-list{display:flex;flex-direction:column;gap:10px;}
+  .result-row{
+    display:flex;
+    align-items:center;
+    gap:16px;
+    background:#fff;
+    border:1px solid var(--paper-line);
+    border-radius:4px;
+    padding:14px 18px;
+  }
+  .seal{
+    width:56px;height:56px;
+    border-radius:50%;
+    border:2.5px solid currentColor;
+    display:flex;
+    align-items:center;
+    justify-content:center;
+    text-align:center;
+    font-family:'IBM Plex Mono',monospace;
+    font-size:9.5px;
+    font-weight:600;
+    line-height:1.15;
+    flex-shrink:0;
+    transform:rotate(-6deg);
+    letter-spacing:.3px;
+  }
+  .seal.green{color:var(--green);}
+  .seal.red{color:var(--red);}
+  .seal.amber{color:var(--amber);}
+  .row-main{flex:1;min-width:0;}
+  .row-org{font-weight:600;font-size:14.5px;}
+  .row-detail{font-size:13px;color:var(--ink-soft);margin-top:2px;}
+  .row-days{
+    font-family:'IBM Plex Mono',monospace;
+    font-size:13px;
+    font-weight:600;
+    text-align:right;
+    min-width:110px;
+  }
+
+  footer.note{
+    margin-top:36px;
+    font-size:12px;
+    color:var(--ink-soft);
+    border-top:1px solid var(--paper-line);
+    padding-top:14px;
+    line-height:1.6;
+  }
+
+  .mon-empty{color:var(--ink-soft);font-size:13.5px;padding:14px 0;}
+  .mon-row{
+    display:flex;
+    align-items:center;
+    gap:14px;
+    background:#fff;
+    border:1px solid var(--paper-line);
+    border-radius:4px;
+    padding:12px 16px;
+    margin-bottom:8px;
+    cursor:pointer;
+  }
+  .mon-row:hover{border-color:var(--gold);}
+  .mon-id{flex:1;min-width:0;}
+  .mon-cnpj{font-family:'IBM Plex Mono',monospace;font-size:12.5px;color:var(--ink-soft);}
+  .mon-nome{font-weight:600;font-size:14px;}
+  .mon-tags{display:flex;gap:6px;flex-wrap:wrap;}
+  .tag{
+    font-family:'IBM Plex Mono',monospace;
+    font-size:10.5px;
+    font-weight:600;
+    padding:4px 7px;
+    border-radius:3px;
+    border:1px solid currentColor;
+    white-space:nowrap;
+  }
+  .tag.green{color:var(--green);background:var(--green-bg);}
+  .tag.red{color:var(--red);background:var(--red-bg);}
+  .tag.amber{color:var(--amber);background:var(--amber-bg);}
+  .mon-updated{font-size:11.5px;color:var(--ink-soft);text-align:right;min-width:110px;}
+
+  .logo-slot{display:flex;align-items:center;}
+  .logo-slot img{height:52px;width:auto;object-fit:contain;}
+  .logo-add{
+    border:1.5px dashed #C9C2AE;
+    border-radius:4px;
+    padding:14px 18px;
+    font-size:11.5px;
+    color:var(--ink-soft);
+    cursor:pointer;
+    text-align:center;
+    line-height:1.3;
+  }
+  .logo-add:hover{border-color:var(--gold);color:var(--gold);}
+  .logo-change{
+    font-size:10.5px;
+    color:var(--ink-soft);
+    text-decoration:underline;
+    cursor:pointer;
+    margin-left:8px;
+  }
+  .print-only{display:none;}
+
+  @media print{
+    @page{ size:A4; margin:14mm; }
+    .print-btn, .dropzone, .btn-row, .manual-row{display:none !important;}
+    #secaoEmissao, #secaoMonitoradas, #cnpjBlock, #avisoFraude, #rodapeNota{display:none !important;}
+    .print-only{display:block;}
+    body{background:#fff;}
+    .card{break-inside:avoid;}
+    .wrap{padding:0;max-width:100%;}
+    header.top{margin-bottom:14px;padding-bottom:12px;}
+    h1{font-size:20px;}
+    .subtitle{display:none;}
+    #printIdent{
+      font-family:'IBM Plex Mono',monospace;
+      font-size:12.5px;
+      margin:-6px 0 18px;
+      color:var(--ink-soft);
+    }
+    h2.section-title{font-size:15px;margin-bottom:10px;}
+    .banner{padding:10px 14px;font-size:13.5px;margin-bottom:12px;}
+    .result-row{padding:10px 14px;gap:12px;}
+    .seal{width:46px;height:46px;font-size:8px;}
+    .row-org{font-size:13px;}
+    .row-detail{font-size:11.5px;}
+    #printFooter{
+      margin-top:24px;
+      font-size:10px;
+      color:var(--ink-soft);
+      border-top:1px solid var(--paper-line);
+      padding-top:8px;
+    }
+  }
+</style>
+<style id="modern-ui-v290">
+:root{--navy:#071b35;--navy2:#0b274b;--blue:#1769e0;--blue2:#3b82f6;--cyan:#eaf4ff;--surface:#fff;--bg:#f5f8fc;--line:#dfe8f3;--muted:#6b7c93;--success:#138a48;--successbg:#e9f8ef;--danger:#c0392b;--shadow:0 12px 35px rgba(16,42,76,.08)}
+body{background:var(--bg)!important;color:#10233f!important;font-family:'Inter',sans-serif!important;}
+body:before{content:'';position:fixed;inset:0 0 auto 0;height:260px;background:radial-gradient(circle at 65% 0%,#dbeafe 0,transparent 38%),linear-gradient(135deg,#f8fbff,#eef5ff);z-index:-1}
+.app-sidebar{position:fixed;inset:0 auto 0 0;width:238px;background:linear-gradient(180deg,var(--navy),#06182e 72%,#0b274b);color:#fff;padding:26px 20px;z-index:20;display:flex;flex-direction:column;box-shadow:8px 0 30px rgba(7,27,53,.08)}
+.brand{display:flex;gap:12px;align-items:center;margin-bottom:34px}.brand-mark{width:42px;height:42px;border-radius:13px;background:linear-gradient(145deg,#1f7aff,#51a3ff);display:grid;place-items:center;box-shadow:0 8px 20px rgba(31,122,255,.35);font-size:21px}.brand b{font-size:18px}.brand small{display:block;color:#a9bdd5;margin-top:3px}
+.side-nav{display:grid;gap:8px}.side-link{padding:12px 13px;border-radius:11px;color:#c8d7e8;font-size:14px;display:flex;gap:11px;align-items:center}.side-link.active{background:linear-gradient(90deg,#1266d8,#1f7df0);color:#fff;box-shadow:0 8px 18px rgba(20,105,224,.25)}.side-link span{width:20px;text-align:center}.side-foot{margin-top:auto;color:#91a8c2;font-size:11px;line-height:1.5;border-top:1px solid rgba(255,255,255,.1);padding-top:18px}
+.wrap{max-width:none!important;margin-left:238px!important;padding:24px 32px 70px!important;width:calc(100% - 238px)}
+header.top{border:0!important;padding:0 0 18px!important;margin-bottom:14px!important;align-items:center!important}header.top h1{font-family:'Inter',sans-serif!important;font-size:25px!important;font-weight:800!important;letter-spacing:-.5px}.subtitle{font-size:13px!important;color:var(--muted)!important}.logo-slot{display:none!important}.print-btn{border:1px solid var(--line)!important;border-radius:10px!important;background:#fff!important;padding:10px 14px!important;box-shadow:0 4px 14px rgba(16,42,76,.05)}
+.modern-hero{background:linear-gradient(120deg,#edf5ff 0%,#fff 58%,#e9f6ff 100%);border:1px solid #d9e9fb;border-radius:20px;padding:24px 28px;margin-bottom:18px;box-shadow:var(--shadow);position:relative;overflow:hidden}.modern-hero:after{content:'';position:absolute;width:240px;height:240px;border-radius:50%;right:-70px;top:-110px;background:rgba(59,130,246,.08)}.modern-hero h2{margin:0 0 7px;font-size:22px;letter-spacing:-.4px}.modern-hero p{margin:0;color:var(--muted);font-size:13.5px}.hero-chips{display:flex;gap:18px;margin-top:17px;flex-wrap:wrap}.hero-chip{font-size:12px;font-weight:700;color:#27496f}.hero-chip:before{content:'✓';display:inline-grid;place-items:center;width:19px;height:19px;border-radius:7px;background:#dcecff;color:#1769e0;margin-right:7px}
+#avisoFraude{border-left:0!important;background:#fff8e8!important;border-color:#f3dfaa!important;padding:14px 18px!important;border-radius:12px!important}#avisoFraude label{margin-bottom:4px!important}#avisoFraude>div{font-size:12.5px!important}
+.cnpj-block{border:1px solid var(--line)!important;border-left:0!important;border-radius:16px!important;background:#fff!important;box-shadow:var(--shadow);padding:18px 20px!important;margin-bottom:18px!important}.cnpj-block label{color:#63758d!important}.cnpj-row{gap:10px!important}input#cnpj,#razaoSocial{background:#f8fbff!important;border:1px solid #d8e4f1!important;border-radius:10px!important;padding:12px 14px!important}input#cnpj:focus{outline:2px solid #8abfff!important}
+#secaoEmissao,.modern-section,#secaoMonitoradas{background:#fff;border:1px solid var(--line);border-radius:18px;padding:22px;margin:18px 0;box-shadow:var(--shadow)}h2.section-title{font-family:'Inter',sans-serif!important;font-size:18px!important;font-weight:800!important}.section-sub{color:var(--muted)!important;font-size:12.5px!important}.grid{grid-template-columns:repeat(2,minmax(0,1fr))!important;gap:14px!important;margin-bottom:0!important}.card{border:1px solid var(--line)!important;border-radius:15px!important;box-shadow:0 6px 18px rgba(17,49,86,.05);transition:.2s}.card:hover{transform:translateY(-2px);box-shadow:0 12px 28px rgba(17,49,86,.09);border-color:#bcd7f5!important}.card-head{border-bottom:1px solid #edf2f7!important;padding:16px 17px 12px!important}.card-eyebrow{color:#67809e!important}.card-title{font-family:'Inter',sans-serif!important;font-weight:800!important;font-size:15px!important}.card-body{padding:13px 17px 17px!important}.btn{border:0!important;border-radius:9px!important;background:linear-gradient(90deg,#0e3970,#0d5fc7)!important;padding:9px 12px!important}.btn.secondary{background:#fff!important;color:#17416f!important;border:1px solid #b9d2ee!important}.dropzone{border:1px dashed #a8c8e8!important;border-radius:10px!important;background:#f7fbff!important;padding:12px!important}.dropzone.hasfile{background:var(--successbg)!important;border-color:#63bf86!important}.manual-row select,.manual-row input[type=date],.manual-row input[type=text]{border-radius:8px!important;border-color:#d7e2ee!important}.banner{border-radius:12px!important}.result-row{border-radius:12px!important;border-color:var(--line)!important}
+.v2-panel{margin:18px 0!important;border:1px solid #cfe0f3!important;background:linear-gradient(145deg,#fff,#f6faff)!important;border-radius:18px!important;padding:22px!important;box-shadow:var(--shadow)!important}.v2-panel h2{font-size:18px!important}.v2-btn{border-radius:10px!important;padding:11px 16px!important;background:linear-gradient(90deg,#0d4fa8,#1773e6)!important;box-shadow:0 7px 16px rgba(23,105,224,.18)}.v2-btn.secondary{background:#fff!important;color:#17416f!important;border:1px solid #bdd3ea!important;box-shadow:none}.v2-btn.danger{background:#fff!important;color:#b33434!important;border:1px solid #efc5c5!important;box-shadow:none}.v2-progress{height:8px!important;background:#e4edf7!important}.v2-progress>div{background:linear-gradient(90deg,#1769e0,#4b9cff)!important}.v2-grid{gap:9px!important}.v2-step{border-color:#dce8f4!important;border-radius:11px!important;background:#fff!important}.v2-step small{color:#718399!important}
+.note{color:#8291a5!important;border-top:1px solid var(--line)!important;margin-top:22px!important;padding-top:16px!important;font-size:11px!important}
+@media(max-width:1000px){.app-sidebar{width:76px;padding:22px 12px}.brand>div:last-child,.side-link:not(.active){font-size:0}.side-link{justify-content:center}.side-link span{font-size:18px}.side-foot{display:none}.wrap{margin-left:76px!important;width:calc(100% - 76px);padding:20px!important}}
+@media(max-width:700px){.app-sidebar{display:none}.wrap{margin-left:0!important;width:100%;padding:14px!important}.grid{grid-template-columns:1fr!important}.modern-hero{padding:20px}.cnpj-row>*{width:100%!important}.v2-grid{grid-template-columns:1fr!important}}
+@media print{.app-sidebar,.modern-hero{display:none!important}.wrap{margin:0!important;width:100%!important}}
+</style>
+</head>
+<body>
+<aside class="app-sidebar">
+  <div class="brand"><div class="brand-mark">◆</div><div><b>Central de Certidões</b><small>Gestão e regularidade fiscal</small></div></div>
+  <nav class="side-nav">
+    <div class="side-link active"><span>⌂</span> Nova consulta</div>
+    <div class="side-link"><span>◷</span> Histórico</div>
+    <div class="side-link"><span>▦</span> Empresas</div>
+    <div class="side-link"><span>↗</span> Relatórios</div>
+    <div class="side-link"><span>⚙</span> Configurações</div>
+  </nav>
+  <div class="side-foot"><b>CONTROLADORIA GERAL</b><br>Município de Horizonte/CE<br><br>Central de Certidões · v2.9.3.5</div>
+</aside>
+<div class="wrap">
+
+  <header class="top">
+    <div style="display:flex;align-items:center;gap:16px;">
+      <div class="logo-slot" id="logoSlot"></div>
+      <div>
+        <h1>Central de Certidões</h1>
+        <div class="subtitle">Reúne os quatro links oficiais de emissão e monta o painel de situação a partir dos PDFs baixados.</div>
+      </div>
+    </div>
+    <button class="print-btn" onclick="window.print()">Imprimir painel</button>
+  </header>
+<section class="modern-hero">
+  <h2>Emita e gerencie certidões de forma automática</h2>
+  <p>Consulte as principais fontes oficiais, acompanhe o processamento e mantenha os documentos organizados em um único ambiente.</p>
+  <div class="hero-chips"><div class="hero-chip">Processo assistido</div><div class="hero-chip">PDFs arquivados</div><div class="hero-chip">Situação e validade extraídas</div></div>
+</section>
+  <input type="file" id="logoFileInput" accept="image/*" style="display:none">
+  <span class="print-only" id="printIdent"></span>
+
+  <div class="cnpj-block" id="avisoFraude" style="border-left-color:var(--red);background:var(--red-bg);">
+    <label style="color:var(--red);">Aviso sobre autenticidade</label>
+    <div style="font-size:13.5px;line-height:1.6;color:var(--ink);">O texto lido de um PDF não prova que a certidão é verdadeira — um documento falsificado pode exibir qualquer situação e qualquer data de validade. A única confirmação confiável é consultar o número da certidão diretamente no site do órgão emissor. Cada cartão abaixo tem um botão "Verificar autenticidade" para isso; até você marcar a conferência, a certidão aparece como <strong>não verificada</strong> no painel.</div>
+  </div>
+
+  <div class="cnpj-block" id="cnpjBlock">
+    <label for="cnpj">CNPJ da empresa</label>
+    <div class="cnpj-row">
+      <input id="cnpj" type="text" placeholder="00.000.000/0000-00" maxlength="18" inputmode="numeric">
+      <input id="razaoSocial" type="text" placeholder="Razão social (opcional)" style="flex:1;min-width:200px;font-family:'Inter',sans-serif;font-size:14px;border:1px solid #C9C2AE;border-radius:3px;padding:11px 14px;background:var(--paper);color:var(--ink);">
+      <span class="cnpj-status" id="cnpjStatus">Informe os 14 dígitos</span>
+    </div>
+    <div class="cnpj-status" id="historicoAviso" style="margin-top:10px;"></div>
+  </div>
+
+  <div id="secaoEmissao">
+    <h2 class="section-title">1. Emitir nas fontes oficiais</h2>
+    <div class="section-sub">O CNPJ é preparado automaticamente para cada portal; na Receita Federal ele é preenchido no formato XX.XXX.XXX/XXXX-XX. Cada site pede a validação de CAPTCHA — essa etapa é manual por exigência do próprio órgão. Depois de baixar o PDF, envie-o na caixa abaixo do respectivo cartão.</div>
+    <div class="grid" id="cardsGrid"></div>
+  </div>
+
+  <section class="modern-section">
+  <h2 class="section-title">2. Painel consolidado</h2>
+  <div class="section-sub">Situação e validade extraídas dos PDFs enviados. Confira o resultado automático — se o texto do PDF vier escaneado como imagem, ajuste manualmente pelos campos de cada cartão.</div>
+  <div id="consolidado">
+    <div class="banner gray">Envie ao menos uma certidão para começar o painel.</div>
+  </div>
+  </section>
+
+  <div id="secaoMonitoradas">
+    <h2 class="section-title">3. Empresas monitoradas</h2>
+    <div class="section-sub">Registro local das últimas certidões conferidas nesta ferramenta. Cada CNPJ já consultado é salvo automaticamente; ao digitar um CNPJ que já está aqui, os últimos dados aparecem de imediato, ordenados pelo vencimento mais próximo. Isso não é uma nova consulta ao governo — é o retrato da última vez em que você conferiu cada certidão aqui.</div>
+    <div id="monitoradas"></div>
+  </div>
+
+  <footer class="note" id="rodapeNota">
+    Ferramenta de apoio: os links abrem os sites oficiais de cada órgão, mas a emissão e o CAPTCHA são feitos manualmente por exigência deles. A leitura dos PDFs é automática por reconhecimento de texto; confira sempre o documento original antes de anexar a um processo. O registro de empresas monitoradas fica salvo neste navegador/conta e reflete a data da última conferência feita aqui, não uma consulta automática em tempo real aos órgãos.
+  </footer>
+  <div class="print-only" id="printFooter"></div>
+</div>
+
+<script>
+if(window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+
+const ORGAOS = [
+  {
+    key:'federal',
+    eyebrow:'Receita Federal / PGFN',
+    title:'Certidão Negativa Federal',
+    url:'https://www.gov.br/pt-br/servicos/emitir-certidao-de-regularidade-fiscal',
+    urlAlt:'https://www.regularize.pgfn.gov.br/',
+    verifyUrl:'https://solucoes.receita.fazenda.gov.br/Servicos/certidao/certaut/NIAutentic.asp?origem=pj',
+  },
+  {
+    key:'fgts',
+    eyebrow:'Caixa Econômica Federal',
+    title:'Certificado de Regularidade do FGTS',
+    url:'https://consulta-crf.caixa.gov.br/consultacrf/pages/consultaEmpregador.jsf',
+    verifyUrl:'https://consulta-crf.caixa.gov.br/consultacrf/pages/consultaEmpregador.jsf',
+  },
+  {
+    key:'trabalhista',
+    eyebrow:'Tribunal Superior do Trabalho',
+    title:'Certidão Negativa de Débitos Trabalhistas',
+    url:'https://www.tst.jus.br/certidao1',
+    verifyUrl:'https://www.tst.jus.br/certidao1',
+  },
+  {
+    key:'ceara',
+    eyebrow:'SEFAZ · Estado do Ceará',
+    title:'Certidão Negativa de Débitos Estaduais',
+    url:'https://consultapublica.sefaz.ce.gov.br/certidaonegativa/preparar-consultar',
+    verifyUrl:'https://consultapublica.sefaz.ce.gov.br/certidaonegativa/preparar-consultar',
+  },
+  {
+    key:'municipal',
+    eyebrow:'Prefeitura do município da empresa',
+    title:'Certidão Negativa Municipal',
+    semPortalFixo:true,
+    pedirMunicipio:true,
+  },
+];
+
+const state = {}; // key -> {status, validade, org}
+// Persistência local para o histórico da Central. No localhost do Chrome não
+// existe window.storage nativo; usamos localStorage como fallback para que
+// situação, validade, código e o link do PDF arquivado sobrevivam ao recarregar.
+if(!window.storage){
+  window.storage = {
+    async set(key, value){ localStorage.setItem(key, value); return { key, value }; },
+    async get(key){ const value = localStorage.getItem(key); return value === null ? null : { key, value }; },
+    async list(prefix=''){
+      const keys = [];
+      for(let i=0;i<localStorage.length;i++){
+        const k = localStorage.key(i);
+        if(k && k.startsWith(prefix)) keys.push(k);
+      }
+      return { keys };
+    }
+  };
+}
+
+
+function maskCnpj(v){
+  v = v.replace(/\D/g,'').slice(0,14);
+  let out = v;
+  if(v.length>12) out = v.replace(/^(\d{2})(\d{3})(\d{3})(\d{4})(\d{0,2})/, '$1.$2.$3/$4-$5');
+  else if(v.length>8) out = v.replace(/^(\d{2})(\d{3})(\d{3})(\d{0,4})/, '$1.$2.$3/$4');
+  else if(v.length>5) out = v.replace(/^(\d{2})(\d{3})(\d{0,3})/, '$1.$2.$3');
+  else if(v.length>2) out = v.replace(/^(\d{2})(\d{0,3})/, '$1.$2');
+  return out;
+}
+
+function cnpjDigits(){
+  return document.getElementById('cnpj').value.replace(/\D/g,'');
+}
+
+let lastCnpjCarregado = '';
+
+function resetFormulario(){
+  document.getElementById('razaoSocial').value = '';
+  ORGAOS.forEach(o=>{
+    state[o.key] = undefined;
+    document.getElementById(`sel-${o.key}`).value = '';
+    document.getElementById(`date-${o.key}`).value = '';
+    document.getElementById(`numero-${o.key}`).value = '';
+    document.getElementById(`check-${o.key}`).checked = false;
+    const dz = document.getElementById(`drop-${o.key}`);
+    dz.classList.remove('hasfile','reading');
+    dz.textContent = 'Enviar o PDF baixado desta certidão';
+    document.getElementById(`file-${o.key}`).value = '';
+    const municipioEl = document.getElementById(`municipio-${o.key}`);
+    if(municipioEl) municipioEl.value = '';
+  });
+  renderConsolidado();
+}
+
+document.getElementById('cnpj').addEventListener('input', async (e)=>{
+  const digits = e.target.value.replace(/\D/g,'').slice(0,14);
+  e.target.value = maskCnpj(digits);
+  const statusEl = document.getElementById('cnpjStatus');
+  if(digits.length === 14){
+    statusEl.textContent = 'CNPJ completo';
+    statusEl.className = 'cnpj-status ok';
+    if(digits !== lastCnpjCarregado){
+      resetFormulario();
+      lastCnpjCarregado = digits;
+      await loadEmpresaFromHistorico(digits);
+      buscarNomeEmpresa(digits);
+    }
+  } else {
+    resetFormulario();
+    statusEl.textContent = digits.length + ' de 14 dígitos';
+    statusEl.className = 'cnpj-status';
+    document.getElementById('historicoAviso').textContent = '';
+    lastCnpjCarregado = '';
+  }
+  atualizarImpressao();
+});
+
+async function buscarNomeEmpresa(digits){
+  const razaoInput = document.getElementById('razaoSocial');
+  const statusEl = document.getElementById('cnpjStatus');
+  if(razaoInput.value) { atualizarImpressao(); return; }
+  const placeholderOriginal = razaoInput.placeholder;
+  razaoInput.placeholder = 'Buscando nome da empresa…';
+  statusEl.textContent = 'CNPJ completo · buscando empresa…';
+  try{
+    const resp = await fetch(`/api/cnpj/${digits}`, { cache:'no-store' });
+    const data = await resp.json().catch(()=>({}));
+    if(resp.ok){
+      const nome = data.razao_social || data.nome_fantasia || '';
+      if(cnpjDigits() !== digits) return;
+      if(nome && !razaoInput.value){
+        razaoInput.value = nome;
+        statusEl.textContent = 'CNPJ completo · empresa localizada' + (data.uf ? ' · UF ' + data.uf : '');
+        statusEl.className = 'cnpj-status ok';
+        atualizarImpressao();
+        salvarNoHistorico();
+        return;
+      }
+    }
+    statusEl.textContent = 'CNPJ completo · informe a razão social';
+    statusEl.className = 'cnpj-status';
+  }catch(err){
+    statusEl.textContent = 'CNPJ completo · consulta de empresa indisponível';
+    statusEl.className = 'cnpj-status';
+  } finally {
+    razaoInput.placeholder = placeholderOriginal;
+  }
+}
+
+function copyAndOpen(url, key){
+  const digits = cnpjDigits();
+  if(digits.length !== 14){
+    alert('Informe o CNPJ completo antes de abrir o portal.');
+    return;
+  }
+  navigator.clipboard.writeText(digits).catch(()=>{});
+  window.open(url, '_blank');
+}
+
+function buildCards(){
+  const grid = document.getElementById('cardsGrid');
+  grid.innerHTML = ORGAOS.map(o => `
+    <div class="card" id="card-${o.key}">
+      <div class="card-head">
+        <div class="card-eyebrow">${o.eyebrow}</div>
+        <div class="card-title">${o.title}</div>
+        ${o.semPortalFixo ? `<div style="font-size:12px;color:var(--ink-soft);margin-top:6px;">Cada prefeitura tem seu próprio site — não há um portal único para linkar aqui. Emita direto no site do município da empresa e anexe o PDF abaixo; a conferência final é manual.</div>` : ''}
+      </div>
+      <div class="card-body">
+        ${o.pedirMunicipio ? `<input type="text" id="municipio-${o.key}" placeholder="Município emissor (ex: Horizonte/CE)" style="font-family:'Inter',sans-serif;font-size:13px;padding:8px 10px;border:1px solid #C9C2AE;border-radius:3px;" onchange="manualUpdate('${o.key}')">` : ''}
+        ${o.url ? `
+        <div class="btn-row">
+          <a class="btn" href="#" onclick="copyAndOpen('${o.url}','${o.key}');return false;">Abrir portal ↗ e copiar CNPJ</a>
+          ${o.urlAlt ? `<a class="btn secondary" href="#" onclick="copyAndOpen('${o.urlAlt}','${o.key}');return false;">Canal alternativo (PGFN)</a>` : ''}
+        </div>` : ''}
+        <div class="dropzone" id="drop-${o.key}" onclick="document.getElementById('file-${o.key}').click()">
+          Enviar o PDF baixado desta certidão
+        </div>
+        <div id="auto-pdf-${o.key}" style="display:none;margin-top:7px;font-size:12px;"></div>
+        <input type="file" accept="application/pdf" id="file-${o.key}" style="display:none">
+        <div class="manual-row" id="manual-${o.key}">
+          <div class="manual-label">Situação e validade (confira ou ajuste)</div>
+          <select id="sel-${o.key}" onchange="manualUpdate('${o.key}')">
+            <option value="">— não verificado —</option>
+            <option value="negativa">Negativa</option>
+            <option value="positiva_efeito_negativa">Positiva c/ efeito de negativa</option>
+            <option value="positiva">Positiva (irregular)</option>
+          </select>
+          <input type="date" id="date-${o.key}" onchange="manualUpdate('${o.key}')">
+        </div>
+        <div class="manual-row" style="border-top:1px dashed var(--paper-line);padding-top:10px;margin-top:2px;">
+          <div class="manual-label">Nº da certidão / código de controle</div>
+          <input type="text" id="numero-${o.key}" placeholder="detectado automaticamente ao ler o PDF" style="flex:1;min-width:160px;font-family:'IBM Plex Mono',monospace;font-size:12px;padding:6px 8px;border:1px solid #C9C2AE;border-radius:3px;" onchange="manualUpdate('${o.key}')">
+        </div>
+        ${o.verifyUrl ? `
+        <div class="btn-row">
+          <a class="btn secondary" href="#" onclick="copyVerifyAndOpen('${o.key}');return false;">Verificar autenticidade ↗</a>
+        </div>` : ''}
+        <label class="manual-label" style="display:flex;gap:6px;align-items:center;cursor:pointer;">
+          <input type="checkbox" id="check-${o.key}" onchange="manualUpdate('${o.key}')">
+          ${o.semPortalFixo ? 'Anexada e conferida manualmente' : 'Autenticidade conferida no site oficial'}
+        </label>
+      </div>
+    </div>
+  `).join('');
+
+  ORGAOS.forEach(o=>{
+    document.getElementById(`file-${o.key}`).addEventListener('change', (e)=>handleFile(e, o));
+  });
+}
+
+function archivedPdfName(org){
+  const names = {
+    federal: 'CND FEDERAL.pdf',
+    fgts: 'CRF FGTS.pdf',
+    trabalhista: 'CND TRABALHISTA.pdf',
+    ceara: 'CND ESTADUAL.pdf',
+    municipal: 'CND MUNICIPAL.pdf'
+  };
+  return names[org.key] || 'CERTIDAO.pdf';
+}
+
+function showArchivedPdf(org, pdfUrl, pdfNome=''){
+  if(!org || !pdfUrl) return;
+  const name = pdfNome || archivedPdfName(org);
+  const dz = document.getElementById(`drop-${org.key}`);
+  if(dz){
+    dz.classList.remove('reading');
+    dz.classList.add('hasfile');
+    dz.textContent = `${name} — lido e arquivado`;
+  }
+  const link = document.getElementById(`auto-pdf-${org.key}`);
+  if(link){
+    link.style.display='block';
+    link.innerHTML = `<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+      <a class="btn secondary" href="${pdfUrl}" target="_blank" rel="noopener">🖨 Abrir / imprimir PDF</a>
+      <a class="btn secondary" href="${pdfUrl}" download="${name}">⬇ Baixar PDF</a>
+      <span style="color:var(--green);font-weight:600">Guardado na Central</span>
+    </div>`;
+  }
+}
+
+async function handleFile(e, org){
+ const file=e.target.files[0], cnpj=cnpjDigits(); if(!file)return;
+ if(cnpj.length!==14){alert('Informe o CNPJ completo antes de anexar.');e.target.value='';return;}
+ const dz=document.getElementById('drop-'+org.key);dz.textContent='Arquivando '+file.name+'…';
+ try{
+  const r=await fetch('/api/manual/'+cnpj+'/'+org.key,{method:'POST',headers:{'Content-Type':'application/pdf'},body:file});
+  const cert=await r.json();if(!r.ok)throw Error(cert.error||'Falha no arquivamento');
+  if(cnpjDigits()!==cnpj)return;
+  state[org.key]={...cert,org,pdfUrl:cert.fileUrl,pdfNome:cert.fileName,verificado:false};
+  document.getElementById('sel-'+org.key).value=cert.status||'';
+  document.getElementById('date-'+org.key).value=cert.validade||'';
+  document.getElementById('numero-'+org.key).value=cert.numero||'';
+  showArchivedPdf(org,cert.fileUrl,cert.fileName);await salvarNoHistorico();renderConsolidado();window.renderDreamDashboard?.();
+ }catch(err){dz.textContent='Não foi possível arquivar: '+err.message;alert(dz.textContent);}finally{e.target.value='';}
+}
+
+function parseCertidao(rawText){
+  const upper = rawText.toUpperCase();
+  let status = '';
+  if(/POSITIVA\s+COM\s+EFEITOS?\s+DE\s+NEGATIVA/.test(upper)){
+    status = 'positiva_efeito_negativa';
+  } else if(/CERTID[ÃA]O\s+NEGATIVA/.test(upper) || /(?<!POSITIVA\s)\bNEGATIVA\b/.test(upper)){
+    status = 'negativa';
+  } else if(/CERTID[ÃA]O\s+POSITIVA/.test(upper) || /\bPOSITIVA\b/.test(upper)){
+    status = 'positiva';
+  } else if(/SITUA[ÇC][ÃA]O\s+(?:N[ÃA]O\s+)?IRREGULAR/.test(upper) || /N[ÃA]O\s+SE\s+ENCONTRA\s+(?:EM\s+)?REGULAR/.test(upper)){
+    // linguagem do FGTS: "não se encontra em situação regular"
+    status = 'positiva';
+  } else if(/EM\s+SITUA[ÇC][ÃA]O\s+REGULAR/.test(upper) || /ENCONTRA-SE\s+REGULAR/.test(upper)){
+    // linguagem do FGTS: "encontra-se em situação regular" — equivale a negativa (sem pendência)
+    status = 'negativa';
+  }
+
+  // find the validity date — certidões costumam usar "válida até X" ou um
+  // intervalo "de X a Y"; nesse segundo caso o vencimento é a ÚLTIMA data
+  let validade = '';
+  const validIdx = upper.search(/V[ÁA]LID[AO]?/);
+  if(validIdx !== -1){
+    const janela = upper.slice(validIdx, validIdx + 60);
+    const datasNaJanela = [...janela.matchAll(/\d{2}\/\d{2}\/\d{4}/g)].map(m=>m[0]);
+    if(datasNaJanela.length){
+      validade = toIsoDate(datasNaJanela[datasNaJanela.length - 1]);
+    }
+  }
+  if(!validade){
+    const allDates = [...upper.matchAll(/\d{2}\/\d{2}\/\d{4}/g)].map(m=>m[0]);
+    if(allDates.length){
+      // assume the latest date found is the validity date
+      const iso = allDates.map(toIsoDate).sort();
+      validade = iso[iso.length-1];
+    }
+  }
+
+  let numero = '';
+  const numPatterns = [
+    /CERTID[ÃA]O\s*N[ºO°]\s*[:\.]?\s*([\d\/\.\-]{4,25})/,
+    /N[ºO°]\s*DA\s*CERTID[ÃA]O\s*[:\.]?\s*([\d\/\.\-]{4,25})/,
+    /CERTIFICA[ÇC][ÃA]O\s*N[ÚU]MERO\s*[:\.]?\s*([\d\/\.\-]{6,25})/,
+    /C[ÓO]DIGO\s*DE\s*CONTROLE(?:\s*DA\s*CERTID[ÃA]O)?\s*[:\-]?\s*([0-9A-Z]{2,6}(?:[.\-][0-9A-Z]{2,6}){1,5})/,
+    /CERTID[ÃA]O\s+NEGATIVA\s+DE\s+D[ÉE]BITOS\s+ESTADUAIS\s*(\d{6,15})/,
+  ];
+  for(const p of numPatterns){
+    const m = upper.match(p);
+    if(m){ numero = m[1].trim(); break; }
+  }
+
+  return {status, validade, numero};
+}
+
+function toIsoDate(br){
+  const [d,m,y] = br.split('/');
+  return `${y}-${m}-${d}`;
+}
+
+function manualUpdate(key){
+  const org = ORGAOS.find(o=>o.key===key);
+  const status = document.getElementById(`sel-${key}`).value;
+  const validade = document.getElementById(`date-${key}`).value;
+  const numero = document.getElementById(`numero-${key}`).value;
+  const verificado = document.getElementById(`check-${key}`).checked;
+  const municipioEl = document.getElementById(`municipio-${key}`);
+  const municipio = municipioEl ? municipioEl.value : '';
+  state[key] = { ...state[key], status, validade, numero, verificado, municipio, org };
+  renderConsolidado();
+  salvarNoHistorico();
+}
+
+function copyVerifyAndOpen(key){
+  const org = ORGAOS.find(o=>o.key===key);
+  const digits = cnpjDigits();
+  if(digits.length !== 14){
+    alert('Informe o CNPJ completo antes de verificar.');
+    return;
+  }
+  const numero = document.getElementById(`numero-${key}`).value;
+  const texto = numero ? `${digits} | nº certidão: ${numero}` : digits;
+  navigator.clipboard.writeText(texto).catch(()=>{});
+  window.open(org.verifyUrl, '_blank');
+}
+
+// ---- Base local de empresas consultadas (window.storage) ----
+
+async function salvarNoHistorico(){
+  const digits = cnpjDigits();
+  if(digits.length !== 14) return;
+  const registro = {
+    cnpj: digits,
+    razaoSocial: document.getElementById('razaoSocial').value || '',
+    atualizadoEm: new Date().toISOString(),
+    orgaos: {}
+  };
+  ORGAOS.forEach(o=>{
+    if(state[o.key]) registro.orgaos[o.key] = { status: state[o.key].status, validade: state[o.key].validade, numero: state[o.key].numero, verificado: state[o.key].verificado, municipio: state[o.key].municipio, pdfUrl: state[o.key].pdfUrl || '', pdfNome: state[o.key].pdfNome || '', viewUrl:state[o.key].viewUrl||'', downloadUrl:state[o.key].downloadUrl||'', source:state[o.key].source||'', archivedAt:state[o.key].archivedAt||'' };
+  });
+  try{
+    await window.storage.set('empresa:' + digits, JSON.stringify(registro), false);
+  }catch(err){
+    console.error('Não foi possível salvar no histórico local:', err);
+  }
+  renderMonitoradas();
+}
+
+async function loadEmpresaFromHistorico(digits){
+  const aviso = document.getElementById('historicoAviso');
+  try{
+    const result = await window.storage.get('empresa:' + digits, false);
+    if(!result){ aviso.textContent = 'CNPJ novo — nenhuma certidão registrada ainda aqui.'; aviso.className='cnpj-status'; return; }
+    if(cnpjDigits() !== digits) return;
+    const registro = JSON.parse(result.value);
+    if(registro.razaoSocial) document.getElementById('razaoSocial').value = registro.razaoSocial;
+    ORGAOS.forEach(o=>{
+      const r = registro.orgaos[o.key];
+      if(r){
+        state[o.key] = { ...r, status: r.status, validade: r.validade, numero: r.numero, verificado: r.verificado, municipio: r.municipio, org: o, pdfUrl: r.pdfUrl || '', pdfNome: r.pdfNome || '' };
+        document.getElementById(`sel-${o.key}`).value = r.status || '';
+        document.getElementById(`date-${o.key}`).value = r.validade || '';
+        document.getElementById(`numero-${o.key}`).value = r.numero || '';
+        document.getElementById(`check-${o.key}`).checked = !!r.verificado;
+        const municipioEl = document.getElementById(`municipio-${o.key}`);
+        if(municipioEl) municipioEl.value = r.municipio || '';
+        if(r.pdfUrl) showArchivedPdf(o, r.pdfUrl, r.pdfNome || archivedPdfName(o));
+      }
+    });
+    renderConsolidado();
+    const dt = new Date(registro.atualizadoEm).toLocaleString('pt-BR');
+    aviso.textContent = `Registro encontrado — última conferência feita aqui em ${dt}. Reemita e reenvie as certidões vencidas.`;
+    aviso.className = 'cnpj-status ok';
+  }catch(err){
+    aviso.textContent = 'CNPJ novo — nenhuma certidão registrada ainda aqui.';
+    aviso.className = 'cnpj-status';
+  }
+}
+
+async function renderMonitoradas(){
+  const box = document.getElementById('monitoradas');
+  let keys = [];
+  try{
+    const result = await window.storage.list('empresa:', false);
+    keys = (result && result.keys) || [];
+  }catch(err){
+    box.innerHTML = '<div class="mon-empty">Nenhuma empresa registrada ainda.</div>';
+    return;
+  }
+  if(keys.length === 0){
+    box.innerHTML = '<div class="mon-empty">Nenhuma empresa registrada ainda — as certidões conferidas na seção acima aparecem aqui automaticamente.</div>';
+    return;
+  }
+
+  const registros = [];
+  for(const k of keys){
+    try{
+      const r = await window.storage.get(k, false);
+      if(r) registros.push(JSON.parse(r.value));
+    }catch(err){ /* ignora chave com problema */ }
+  }
+
+  const today = new Date().toISOString().slice(0,10);
+  function proximoVencimento(reg){
+    const validades = ORGAOS.map(o=>reg.orgaos[o.key]?.validade).filter(Boolean);
+    if(validades.length===0) return '9999-99-99';
+    return validades.sort()[0];
+  }
+  registros.sort((a,b)=>proximoVencimento(a).localeCompare(proximoVencimento(b)));
+
+  const TAG_LABEL = { federal:'FEDERAL', fgts:'FGTS', trabalhista:'TRABALHISTA', ceara:'ESTADUAL', municipal:'MUNICIPAL' };
+  box.innerHTML = registros.map(reg=>{
+    const tags = ORGAOS.map(o=>{
+      const r = reg.orgaos[o.key];
+      const rotulo = TAG_LABEL[o.key] || o.key.toUpperCase();
+      if(!r) return `<span class="tag amber">${rotulo}: —</span>`;
+      const expired = r.validade ? r.validade < today : false;
+      const cls = !r.verificado ? 'amber' : (r.status === 'positiva' ? 'red' : (expired ? 'red' : (r.status ? 'green' : 'amber')));
+      const lbl = r.verificado ? statusLabel(r.status) : (o.semPortalFixo ? 'NÃO ATESTADA' : 'NÃO VERIFICADA');
+      return `<span class="tag ${cls}">${rotulo}: ${lbl}${r.validade ? ' · ' + new Date(r.validade+'T00:00:00').toLocaleDateString('pt-BR') : ''}</span>`;
+    }).join('');
+    const dt = new Date(reg.atualizadoEm).toLocaleDateString('pt-BR');
+    return `
+      <div class="mon-row" onclick="abrirDoHistorico('${reg.cnpj}')">
+        <div class="mon-id">
+          <div class="mon-nome">${reg.razaoSocial || 'Razão social não informada'}</div>
+          <div class="mon-cnpj">${maskCnpj(reg.cnpj)}</div>
+        </div>
+        <div class="mon-tags">${tags}</div>
+        <div class="mon-updated">atualizado<br>${dt}</div>
+      </div>`;
+  }).join('');
+}
+
+function abrirDoHistorico(digits){
+  document.getElementById('cnpj').value = maskCnpj(digits);
+  document.getElementById('cnpjStatus').textContent = 'CNPJ completo';
+  document.getElementById('cnpjStatus').className = 'cnpj-status ok';
+  lastCnpjCarregado = digits;
+  loadEmpresaFromHistorico(digits).then(()=>buscarNomeEmpresa(digits));
+  window.scrollTo({top:0, behavior:'smooth'});
+}
+
+function statusLabel(status){
+  return {
+    'negativa': 'NEGATIVA',
+    'positiva_efeito_negativa': 'POSITIVA C/ EFEITO DE NEGATIVA',
+    'positiva': 'POSITIVA — IRREGULAR',
+    '': 'NÃO VERIFICADA'
+  }[status] ?? 'NÃO VERIFICADA';
+}
+
+function sealClass(status, expired, verificado){
+  if(!verificado) return 'amber';
+  if(status === 'positiva') return 'red';
+  if(!status) return 'amber';
+  if(expired) return 'red';
+  return 'green';
+}
+
+function renderConsolidado(){
+  const box = document.getElementById('consolidado');
+  const keys = ORGAOS.map(o=>o.key).filter(k=>state[k]);
+  if(keys.length === 0){
+    box.innerHTML = '<div class="banner gray">Envie ao menos uma certidão para começar o painel.</div>';
+    return;
+  }
+
+  const today = new Date().toISOString().slice(0,10);
+  let allRegular = true;
+  let rows = ORGAOS.map(o=>{
+    const s = state[o.key];
+    if(!s) return `
+      <div class="result-row">
+        <div class="seal amber">A<br>VERIFICAR</div>
+        <div class="row-main">
+          <div class="row-org">${o.title}</div>
+          <div class="row-detail">${o.eyebrow} · certidão ainda não enviada</div>
+        </div>
+        <div class="row-days">—</div>
+      </div>`;
+
+    const expired = s.validade ? s.validade < today : false;
+    const irregular = s.status === 'positiva' || !s.status || expired || !s.verificado;
+    if(irregular) allRegular = false;
+    const cls = sealClass(s.status, expired, s.verificado);
+    let daysTxt = '—';
+    if(s.validade){
+      const diff = Math.round((new Date(s.validade) - new Date(today))/86400000);
+      daysTxt = diff >= 0 ? `${diff} dias restantes` : `vencida há ${Math.abs(diff)} dias`;
+    }
+    const validadeTxt = s.validade ? new Date(s.validade+'T00:00:00').toLocaleDateString('pt-BR') : 'validade não identificada';
+    const sealTxt = s.verificado ? statusLabel(s.status) : (o.semPortalFixo ? 'NÃO ATESTADA' : 'NÃO VERIFICADA NA FONTE');
+    const eyebrowTxt = (o.pedirMunicipio && s.municipio) ? `Prefeitura de ${s.municipio}` : o.eyebrow;
+    const pendenciaTxt = o.semPortalFixo
+      ? `leitura do PDF aponta ${validadeTxt}, mas ainda falta atestar a conferência manual`
+      : `leitura do PDF aponta ${validadeTxt}, mas a autenticidade ainda não foi conferida no site oficial`;
+    const detailTxt = s.verificado
+      ? `${eyebrowTxt} · válida até ${validadeTxt}`
+      : `${eyebrowTxt} · ${pendenciaTxt}`;
+    return `
+      <div class="result-row">
+        <div class="seal ${cls}">${sealTxt}</div>
+        <div class="row-main">
+          <div class="row-org">${o.title}</div>
+          <div class="row-detail">${detailTxt}</div>
+        </div>
+        <div class="row-days">${daysTxt}</div>
+      </div>`;
+  }).join('');
+
+  const allSent = ORGAOS.every(o=>state[o.key]);
+  let bannerClass = 'gray';
+  let bannerTxt = 'Painel parcial — envie as certidões restantes para concluir a conferência.';
+  if(allSent){
+    bannerClass = allRegular ? 'green' : 'red';
+    bannerTxt = allRegular
+      ? 'Situação regular e autenticidade conferida nas quatro esferas — apto para fins de habilitação/pagamento.'
+      : 'Há pendência: alguma certidão está irregular, vencida, ou ainda não teve a autenticidade conferida no site oficial.';
+  }
+
+  box.innerHTML = `<div class="banner ${bannerClass}">${bannerTxt}</div><div class="result-list">${rows}</div>`;
+}
+
+document.getElementById('razaoSocial').addEventListener('change', ()=>{
+  if(cnpjDigits().length === 14) salvarNoHistorico();
+});
+
+// ---- Logotipo da Controladoria ----
+
+function renderLogoSlot(dataUrl){
+  const slot = document.getElementById('logoSlot');
+  if(dataUrl){
+    slot.innerHTML = `<img src="${dataUrl}" alt="Logotipo"><span class="logo-change" onclick="document.getElementById('logoFileInput').click()">trocar</span>`;
+  } else {
+    slot.innerHTML = `<div class="logo-add" onclick="document.getElementById('logoFileInput').click()">+ Logotipo<br>da CGM</div>`;
+  }
+}
+
+function compressImage(file){
+  return new Promise((resolve, reject)=>{
+    const reader = new FileReader();
+    reader.onload = (ev)=>{
+      const img = new Image();
+      img.onload = ()=>{
+        const maxH = 160;
+        const scale = Math.min(1, maxH / img.height);
+        const canvas = document.createElement('canvas');
+        canvas.width = img.width * scale;
+        canvas.height = img.height * scale;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+        resolve(canvas.toDataURL('image/png'));
+      };
+      img.onerror = reject;
+      img.src = ev.target.result;
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
+document.getElementById('logoFileInput').addEventListener('change', async (e)=>{
+  const file = e.target.files[0];
+  if(!file) return;
+  try{
+    const dataUrl = await compressImage(file);
+    renderLogoSlot(dataUrl);
+    await window.storage.set('logo-cgm', dataUrl, false);
+  }catch(err){
+    alert('Não foi possível carregar essa imagem. Tente um PNG ou JPG.');
+  }
+});
+
+async function carregarLogo(){
+  try{
+    const result = await window.storage.get('logo-cgm', false);
+    if(result) renderLogoSlot(result.value);
+    else renderLogoSlot(null);
+  }catch(err){
+    renderLogoSlot(null);
+  }
+}
+
+// ---- Campos exclusivos de impressão ----
+
+function atualizarImpressao(){
+  const digits = cnpjDigits();
+  const razao = document.getElementById('razaoSocial').value;
+  const partes = [];
+  if(digits.length === 14) partes.push('CNPJ: ' + maskCnpj(digits));
+  if(razao) partes.push('Razão social: ' + razao);
+  document.getElementById('printIdent').textContent = partes.join(' · ');
+  document.getElementById('printFooter').textContent = 'Painel gerado em ' + new Date().toLocaleString('pt-BR') + ' — Central de Certidões, Controladoria Geral do Município.';
+}
+document.getElementById('cnpj').addEventListener('input', atualizarImpressao);
+document.getElementById('razaoSocial').addEventListener('input', atualizarImpressao);
+
+carregarLogo();
+buildCards();
+renderConsolidado();
+renderMonitoradas();
+atualizarImpressao();
+</script>
+<style id="v2-enhancements">
+.v2-toolbar{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin:18px 0}.v2-btn{border:0;border-radius:6px;padding:12px 18px;font-weight:800;cursor:pointer;background:#1d4ed8;color:white}.v2-btn.secondary{background:#334155}.v2-btn.danger{background:#991b1b}.v2-btn:disabled{opacity:.5;cursor:not-allowed}.v2-panel{border:1px solid #d6d0bf;background:#fbfaf6;border-radius:8px;padding:18px;margin:16px 0}.v2-progress{height:10px;background:#e7e5df;border-radius:99px;overflow:hidden}.v2-progress>div{height:100%;width:0;background:#2563eb;transition:.3s}.v2-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-top:14px}.v2-step{padding:12px;border:1px solid #ddd8c9;border-radius:7px;background:white}.v2-step b{display:block}.v2-step small{color:#64748b}.v2-log{max-height:240px;overflow:auto;font:12px ui-monospace,monospace;background:#111827;color:#e5e7eb;padding:12px;border-radius:6px;white-space:pre-wrap}.v2-alert{padding:15px;border-radius:7px;border:1px solid #f59e0b;background:#fffbeb;margin:12px 0}.v2-hidden{display:none!important}@media(max-width:900px){.v2-grid{grid-template-columns:1fr 1fr}}@media(max-width:600px){.v2-grid{grid-template-columns:1fr}}
+</style>
+<div class="v2-panel" id="v2AutomationPanel">
+  <h2 style="margin:0 0 6px">Central de Certidões V2 — Consulta assistida</h2>
+  <div style="color:#64748b;font-size:13px">A automação abre os portais e pode preencher o CNPJ. Os portais são processados um por vez. Quando houver CAPTCHA, você resolve apenas a validação humana; a Central espera a conclusão antes de avançar para a próxima certidão. O PDF capturado é incorporado automaticamente.</div>
+  <div class="v2-toolbar">
+    <button class="v2-btn" id="btnConsultarTodas">🤖 Consultar todas as CNDs</button>
+    <button class="v2-btn secondary" id="btnContinuar" disabled>✓ Continuar manualmente (fallback)</button>
+    <button class="v2-btn danger" id="btnParar" disabled>■ Parar</button>
+  </div>
+  <div id="v2Human" class="v2-alert v2-hidden"><b>⚠️ Ação necessária</b><br><span id="v2HumanMsg">Resolva o CAPTCHA na janela do navegador. A Central continuará automaticamente; o botão manual é apenas uma alternativa se a detecção automática falhar.</span></div>
+  <div class="v2-progress"><div id="v2ProgressBar"></div></div>
+  <div id="v2ProgressText" style="margin-top:7px;font-size:13px;color:#475569">Pronto para iniciar.</div>
+  <div class="v2-grid" id="v2Steps"></div>
+  <details style="margin-top:14px"><summary><b>Log da consulta</b></summary><div class="v2-log" id="v2Log"></div></details>
+</div>
+
+
+<script id="modern-layout-init">
+window.addEventListener('DOMContentLoaded',()=>{
+  const panel=document.getElementById('v2AutomationPanel');
+  const cnpj=document.getElementById('cnpjBlock');
+  if(panel&&cnpj) cnpj.insertAdjacentElement('afterend',panel);
+});
+</script>
+<script id="v2-client">
+(() => {
+  const $ = id => document.getElementById(id);
+  let sessionId = null, poll = null;
+  const steps = {};
+  const processedPdfUrls = new Set();
+  function digits(v){return String(v||'').replace(/\D/g,'')}
+  function log(msg){ const el=$('v2Log'); el.textContent += `[${new Date().toLocaleTimeString()}] ${msg}\n`; el.scrollTop=el.scrollHeight; }
+  function renderSteps(names){ $('v2Steps').innerHTML=''; names.forEach(p=>{ const d=document.createElement('div'); d.className='v2-step'; d.id='v2-'+p.key; d.innerHTML=`<b>${p.name}</b><small>Aguardando</small>`; $('v2Steps').appendChild(d); steps[p.key]=d; }); }
+  function step(key,status){ const d=steps[key]; if(!d)return; const sm=d.querySelector('small'); sm.textContent=status; d.style.borderColor = status.includes('concl')?'#22c55e':status.includes('CAPTCHA')?'#f59e0b':'#ddd8c9'; }
+  async function api(url,opt={}){ const r=await fetch(url,{headers:{'Content-Type':'application/json'},...opt}); const j=await r.json(); if(!r.ok)throw new Error(j.error||'Erro'); return j; }
+  $('btnConsultarTodas').onclick=async()=>{
+    const cnpj=digits($('cnpj')?.value); if(cnpj.length!==14){alert('Informe um CNPJ válido com 14 dígitos.');return;}
+    $('btnConsultarTodas').disabled=true; $('btnParar').disabled=false; $('btnContinuar').disabled=true; $('v2Human').classList.add('v2-hidden'); $('v2Log').textContent='';
+    try{ const data=await api('/api/session',{method:'POST',body:JSON.stringify({cnpj,razaoSocial:$('razaoSocial')?.value||''})}); sessionId=data.sessionId; renderSteps(data.portals); log('Sessão iniciada: '+sessionId); poll=setInterval(refresh,800); refresh(); }catch(e){alert(e.message); $('btnConsultarTodas').disabled=false; $('btnParar').disabled=true;}
+  };
+  $('btnContinuar').onclick=async()=>{ if(!sessionId)return; $('btnContinuar').disabled=true; $('v2Human').classList.add('v2-hidden'); await api(`/api/session/${sessionId}/resume`,{method:'POST'}); log('Usuário autorizou a retomada da automação.'); };
+  $('btnParar').onclick=async()=>{ if(!sessionId)return; await api(`/api/session/${sessionId}/stop`,{method:'POST'}); log('Sessão interrompida pelo usuário.'); };
+  async function processAutoPdf(e){
+    if(!e.portal || !e.fileUrl) return;
+    const org = ORGAOS.find(o=>o.key===e.portal);
+    if(!org) return;
+    try{
+      const resp = await fetch(e.fileUrl);
+      if(!resp.ok) throw new Error('PDF não disponível no servidor');
+      const buf = await resp.arrayBuffer();
+      const pdf = await pdfjsLib.getDocument({data: buf}).promise;
+      let text = '';
+      for(let i=1;i<=pdf.numPages;i++){
+        const page = await pdf.getPage(i);
+        const content = await page.getTextContent();
+        text += ' ' + content.items.map(it=>it.str).join(' ');
+      }
+      const parsed = parseCertidao(text);
+      const municipioEl = document.getElementById(`municipio-${org.key}`);
+      const municipio = municipioEl ? municipioEl.value : '';
+      state[org.key] = { status: parsed.status, validade: parsed.validade, numero: parsed.numero, verificado: false, municipio, org, pdfUrl: e.fileUrl, viewUrl: e.viewUrl || e.fileUrl, downloadUrl: e.downloadUrl || e.fileUrl, pdfNome: e.fileName || archivedPdfName(org) };
+      document.getElementById(`sel-${org.key}`).value = parsed.status || '';
+      document.getElementById(`date-${org.key}`).value = parsed.validade || '';
+      document.getElementById(`numero-${org.key}`).value = parsed.numero || '';
+      showArchivedPdf(org, e.fileUrl, e.fileName || archivedPdfName(org));
+      renderConsolidado();
+      salvarNoHistorico();
+      log(`PDF da ${org.name} incluído automaticamente na Central.`);
+    }catch(err){
+      log(`PDF da ${org.name} foi baixado, mas a leitura automática falhou: ${err.message}`);
+    }
+  }
+
+  async function refresh(){
+    if(!sessionId)return;
+    try{
+      const s=await api('/api/session/'+sessionId);
+      const done=s.events.filter(e=>e.type==='portal_done').length;
+      const failed=s.events.filter(e=>e.type==='portal_skipped').length;
+      const total=Math.max(1,(s.portals||[]).length);
+      $('v2ProgressBar').style.width=Math.round((done+failed)/total*100)+'%';
+      $('v2ProgressText').textContent=`${done}/${total} certidões arquivadas · ${failed} pendente(s)${s.status==='partial'?' — Consulta concluída com pendências':''}`;
+      const last=s.events.slice(-12);
+      $('v2Log').textContent=last.map(e=>`${e.time.slice(11,19)} — ${e.message||e.type}${e.portal?' — '+e.portal:''}`).join('\n');
+      const boundary=s.events.findLastIndex(e=>['portal_start','portal_done','portal_skipped','captcha_solved','manual_resume','resumed','complete','stopped'].includes(e.type));
+      const human=s.events.slice(boundary+1).find(e=>e.type==='human_action_required');
+      $('v2Human').classList.toggle('v2-hidden',!human);
+      $('btnContinuar').disabled=!human;
+      if(human) $('v2HumanMsg').textContent=human.message;
+      s.events.forEach(e=>{
+        if(e.portal){
+          if(e.type==='portal_start')step(e.portal,'Consultando');
+          if(e.type==='human_action_required')step(e.portal,'CAPTCHA / ação humana');
+          if(e.type==='captcha_solved')step(e.portal,'CAPTCHA concluído — continuando');
+          if(e.type==='after_captcha_action')step(e.portal,e.clicked?'Prosseguindo automaticamente':'Procurando próxima etapa');
+          if(e.type==='portal_reused')step(e.portal,'✓ Já válida no arquivo');
+          if(e.type==='downloaded'){
+            step(e.portal,'PDF capturado — arquivando documento');
+          }
+          if((e.type==='pdf_archived' || e.type==='pdf_parsed') && e.fileUrl){
+            const org = ORGAOS.find(o=>o.key===e.portal || (String(e.portal).startsWith('estadual-') && o.key==='ceara'));
+            const parsed = e.parsed || e;
+            if(org && parsed){
+              const municipioEl = document.getElementById(`municipio-${org.key}`);
+              const municipio = municipioEl ? municipioEl.value : '';
+              const prev = state[org.key] || {};
+              state[org.key] = {
+                ...prev,
+                source: e.source || prev.source || '',
+                archivedAt: e.archivedAt || prev.archivedAt || '',
+                status: parsed.status || prev.status || '',
+                validade: parsed.validade || prev.validade || '',
+                numero: parsed.numero || prev.numero || '',
+                verificado: prev.verificado || false,
+                municipio,
+                org,
+                pdfUrl: e.fileUrl,
+                viewUrl: e.viewUrl || prev.viewUrl || e.fileUrl,
+                downloadUrl: e.downloadUrl || prev.downloadUrl || e.fileUrl,
+                pdfNome: e.fileName || prev.pdfNome || archivedPdfName(org)
+              };
+              document.getElementById(`sel-${org.key}`).value = state[org.key].status || '';
+              document.getElementById(`date-${org.key}`).value = state[org.key].validade || '';
+              document.getElementById(`numero-${org.key}`).value = state[org.key].numero || '';
+              showArchivedPdf(org, state[org.key].viewUrl || e.fileUrl, state[org.key].pdfNome);
+              salvarNoHistorico();
+              renderConsolidado();
+              window.renderDreamDashboard?.();
+            }
+          }
+          if(e.type==='portal_done')step(e.portal,e.reused?'✓ Já válida no arquivo':'✓ Concluída e arquivada');
+          if(e.type==='portal_error')step(e.portal,'Erro');
+          if(e.type==='portal_skipped')step(e.portal,'Pendente — seguindo fila');
+        }
+      });
+      if(['done','partial','error','stopped'].includes(s.status)){
+        clearInterval(poll);
+        $('btnConsultarTodas').disabled=false;
+        $('btnParar').disabled=true;
+      }
+    }catch(e){console.error(e)}
+  }
+})();
+</script>
+
+
+
+<style id="exact-dashboard-v291">
+/* V2.9.1 — interface inspirada no mockup aprovado */
+body{overflow-x:hidden}
+.app-sidebar{width:214px!important;padding:18px 0 16px!important;background:linear-gradient(180deg,#071b35 0%,#0b274b 100%)!important}
+.app-sidebar .brand{padding:0 22px;margin-bottom:22px!important}.brand-mark{width:42px!important;height:42px!important;border-radius:12px!important;background:linear-gradient(145deg,#0e6df0,#4e9fff)!important}.brand b{font-size:17px!important}.brand small{font-size:11px!important}.side-nav{gap:3px!important}.side-link{border-radius:0!important;padding:14px 22px!important;font-size:13px!important}.side-link.active{background:linear-gradient(90deg,#0f75e8,#1387ef)!important}.side-foot{padding:18px 22px 0!important}
+.wrap{margin-left:214px!important;width:calc(100% - 214px)!important;padding:0!important;max-width:none!important}
+.wrap>header.top,.wrap>.modern-hero,.wrap>#avisoFraude,.wrap>#cnpjBlock,.wrap>#v2AutomationPanel,.wrap>#secaoEmissao,.wrap>.modern-section,.wrap>#secaoMonitoradas,.wrap>#rodapeNota,.wrap>#printFooter,.wrap>#printIdent,.wrap>#logoFileInput{display:none!important}
+#dreamDashboard{min-height:100vh;background:linear-gradient(135deg,#f7fbff 0%,#fff 50%,#f4f9ff 100%);color:#0b2448}
+.dash-topbar{height:78px;background:rgba(255,255,255,.94);border-bottom:1px solid #e4edf8;display:flex;align-items:center;justify-content:center;gap:14px;padding:0 28px;position:sticky;top:0;z-index:10;backdrop-filter:blur(10px)}
+.dash-search{width:min(520px,48vw);height:46px;border:1px solid #cfe0f3;background:#f8fbff;border-radius:11px;display:flex;align-items:center;padding:0 15px;gap:10px;box-shadow:inset 0 1px 2px rgba(15,55,100,.03)}.dash-search input{border:0;outline:0;background:transparent;width:100%;font-size:15px;color:#0b2448}.dash-search .ico{font-size:20px;color:#1d4f91}.dash-consult{height:46px;border:0;border-radius:9px;background:#07356e;color:#fff;font-weight:800;padding:0 29px;cursor:pointer}.dash-top-spacer{flex:1}.dash-theme{font-size:19px;padding:10px 12px}.dash-user{display:flex;align-items:center;gap:10px;margin-left:8px}.dash-avatar{width:40px;height:40px;border-radius:50%;display:grid;place-items:center;color:#fff;background:linear-gradient(135deg,#5e6ff4,#8d71f4);font-weight:800}.dash-user b{font-size:13px}.dash-user small{display:block;color:#6c7d94;font-size:11px;margin-top:2px}
+.dash-main{padding:16px 25px 24px}.dash-hero{height:142px;border:1px solid #dceaf9;border-radius:16px;background:linear-gradient(120deg,#eaf4ff 0%,#fff 58%,#eef9ff 100%);display:grid;grid-template-columns:120px 1fr 230px;align-items:center;padding:20px 28px;box-shadow:0 8px 28px rgba(21,66,112,.06);overflow:hidden}.hero-doc{width:76px;height:92px;border-radius:12px;background:linear-gradient(145deg,#5c9cfb,#2f7cf2);display:grid;place-items:center;color:white;font-size:46px;box-shadow:0 13px 25px rgba(46,122,242,.22)}.dash-hero h2{font-size:21px;margin:0 0 6px}.dash-hero p{margin:0;color:#526a89;font-size:13px}.hero-features{display:flex;gap:28px;margin-top:20px;flex-wrap:wrap}.hero-features span{font-size:12px;color:#27496f}.hero-features span:before{content:'◆';color:#2578ef;margin-right:8px}.hero-note{font-family:cursive;font-size:23px;line-height:1.1;color:#0c3d83;transform:rotate(-5deg);text-align:center}
+.consult-summary{margin-top:14px;border:1px solid #e0e9f4;background:#fff;border-radius:13px;min-height:92px;display:grid;grid-template-columns:1.1fr 1.3fr 1.1fr auto;align-items:center;padding:13px 23px;box-shadow:0 5px 18px rgba(26,66,110,.05)}.sum-block{padding-right:20px;border-right:1px solid #e6edf6}.sum-block:last-of-type{border-right:0}.sum-label{font-size:10px;color:#7890ad;text-transform:uppercase}.sum-value{margin-top:5px;font-weight:800;font-size:16px}.sum-company{font-size:14px}.sum-ok{display:inline-flex;margin-top:5px;background:#dff6e6;color:#15853f;border-radius:9px;padding:3px 8px;font-size:10px;font-weight:700}.new-query{border:1px solid #bcd9fb;background:#f7fbff;color:#0b4a96;border-radius:9px;padding:11px 18px;font-weight:700;cursor:pointer}
+.stepper{display:grid;grid-template-columns:repeat(5,1fr);margin:17px 30px 20px;position:relative}.stepper:before{content:'';position:absolute;top:17px;left:9%;right:9%;height:2px;background:#2d82f3}.step{text-align:center;position:relative}.step-dot{width:34px;height:34px;margin:auto;border-radius:50%;background:#1678e9;color:#fff;display:grid;place-items:center;border:4px solid #e5f1ff;box-shadow:0 0 0 1px #8ac0ff;font-weight:900}.step.pending .step-dot{background:#dbe7f5;color:#6b7e95;box-shadow:none}.step-label{font-size:10px;font-weight:700;margin-top:5px}
+.cert-cards{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:14px}.cert-card{background:#fff;border:1px solid #dfe9f5;border-radius:13px;padding:15px 14px 12px;min-height:192px;box-shadow:0 6px 18px rgba(18,58,100,.05);display:flex;flex-direction:column}.cert-card.active{border:1.5px solid #1678e9;box-shadow:0 8px 24px rgba(22,120,233,.11)}.card-brand{display:flex;align-items:center;gap:10px}.org-icon{width:42px;height:42px;border-radius:10px;background:#eef6ff;color:#0d5fb8;display:grid;place-items:center;font-weight:900;font-size:18px}.cert-card h3{font-size:13px;margin:0}.cert-card .sub{font-size:10px;color:#71839a;margin-top:2px}.status-pill{display:inline-flex;align-items:center;gap:6px;align-self:flex-start;margin-top:14px;background:#dff6e6;color:#107838;border-radius:8px;padding:7px 9px;font-size:11px;font-weight:800}.status-pill.warn{background:#fff3d7;color:#9a6300}.status-pill.bad{background:#fde5e5;color:#aa2d2d}.status-pill.empty{background:#eef3f8;color:#6c7d92}.valid-line{margin-top:10px;font-size:11px;color:#526b8c}.details-btn{margin-top:auto;border:1px solid #b8d7fb;background:#f7fbff;color:#0b468b;border-radius:8px;padding:8px;font-weight:800;font-size:11px;cursor:pointer}
+.doc-workspace{margin-top:16px;border:1px solid #e1eaf5;background:#fff;border-radius:14px;display:grid;grid-template-columns:205px minmax(420px,1fr) 360px;min-height:345px;overflow:hidden;box-shadow:0 8px 28px rgba(16,55,100,.05)}.doc-menu{border-right:1px solid #e7edf5;padding:15px}.doc-back{font-weight:800;font-size:12px;margin-bottom:18px}.doc-tab{padding:11px 12px;border-radius:8px;font-size:12px;color:#38536f;margin-bottom:4px}.doc-tab.active{background:#dcebff;color:#0a4c9b;font-weight:800}.pdf-pane{background:#eef2f6;display:flex;flex-direction:column}.pdf-toolbar{height:47px;background:#30363a;color:#fff;display:flex;align-items:center;padding:0 14px;font-size:11px;gap:12px}.pdf-toolbar b{margin-right:auto}.pdf-frame{flex:1;background:#fff}.pdf-frame iframe{width:100%;height:100%;border:0}.pdf-placeholder{height:100%;display:grid;place-items:center;text-align:center;color:#8293a7;padding:30px}.info-pane{padding:15px;border-left:1px solid #e7edf5}.info-pane h4{font-size:13px;margin:0 0 16px}.info-row{display:flex;justify-content:space-between;gap:18px;padding:8px 0;font-size:11px}.info-row strong{text-align:right}.info-actions{margin-top:12px;display:grid;grid-template-columns:1fr 1fr;gap:8px}.info-actions a,.info-actions button{border:1px solid #0e5fc3;border-radius:8px;background:#fff;color:#0b4d9a;font-weight:800;padding:10px;font-size:11px;text-decoration:none;text-align:center;cursor:pointer}.info-actions .primary{grid-column:1/-1;background:#073a78;color:#fff;border-color:#073a78}
+.dash-footer{display:flex;justify-content:space-between;color:#7387a1;font-size:10px;padding:15px 2px 0}
+.dash-runbar{margin-top:14px;border:1px solid #dce8f5;background:rgba(255,255,255,.95);border-radius:14px;padding:13px 16px;display:grid;grid-template-columns:auto auto auto 1fr;gap:9px;align-items:center;box-shadow:0 6px 22px rgba(18,58,100,.04)}
+.dash-run-btn{border:0;border-radius:9px;padding:11px 16px;font-weight:800;font-size:12px;cursor:pointer;transition:.18s}.dash-run-btn.primary{background:linear-gradient(135deg,#0b63ce,#0b7fe7);color:#fff;box-shadow:0 7px 18px rgba(11,99,206,.22)}.dash-run-btn.secondary{background:#eef5fd;color:#174e87;border:1px solid #cfe0f3}.dash-run-btn.danger{background:#fff3f3;color:#a83232;border:1px solid #f2caca}.dash-run-btn:disabled{opacity:.48;cursor:not-allowed;box-shadow:none}
+.dash-run-status{min-width:0;padding-left:8px}.dash-run-status-top{display:flex;align-items:center;justify-content:space-between;gap:12px;font-size:11px;color:#526a86;margin-bottom:6px}.dash-run-status b{color:#183b66}.dash-run-track{height:7px;border-radius:999px;background:#e7eef7;overflow:hidden}.dash-run-fill{height:100%;width:0;background:linear-gradient(90deg,#0d68d5,#35a0ff);transition:width .25s ease}.dash-human{grid-column:1/-1;background:#fff7df;border:1px solid #f2cf73;color:#7e5800;padding:9px 11px;border-radius:9px;font-size:11px;display:none}.dash-human.show{display:block}
+@media(max-width:1200px){.cert-cards{grid-template-columns:repeat(3,1fr)}.doc-workspace{grid-template-columns:170px 1fr 300px}.hero-note{display:none}.dash-hero{grid-template-columns:100px 1fr}.consult-summary{grid-template-columns:1fr 1fr}.sum-block{border-right:0}.new-query{justify-self:end}}
+@media(max-width:900px){.app-sidebar{display:none!important}.wrap{margin-left:0!important;width:100%!important}.cert-cards{grid-template-columns:1fr 1fr}.doc-workspace{grid-template-columns:1fr}.doc-menu{display:none}.info-pane{border-left:0}.dash-user{display:none}.dash-topbar{padding:0 12px}.dash-main{padding:12px}.dash-hero{grid-template-columns:1fr;height:auto}.hero-doc{display:none}.consult-summary{grid-template-columns:1fr}.stepper{margin-left:0;margin-right:0}}
+</style>
+<script id="exact-dashboard-v291-js">
+(function(){
+  const ORG_META={
+    federal:{name:'Receita Federal',sub:'CND Federal',icon:'◆'},
+    fgts:{name:'FGTS',sub:'Certificado de Regularidade',icon:'▰'},
+    trabalhista:{name:'Trabalhista',sub:'CNDT',icon:'▣'},
+    ceara:{name:'Estadual',sub:'Certidão Estadual',icon:'✦'},
+    municipal:{name:'Municipal',sub:'Certidão Municipal',icon:'⬟'}
+  };
+  let selectedKey='federal';
+  window.centralSelectedKey=()=>selectedKey;
+  let lastFrame='';
+  const fmtCnpj=v=>{const d=String(v||'').replace(/\D/g,'').slice(0,14);return d.length===14?d.replace(/(\d{2})(\d{3})(\d{3})(\d{4})(\d{2})/,'$1.$2.$3/$4-$5'):d};
+  const fmtDate=iso=>{if(!iso)return '—';const [y,m,d]=String(iso).split('-');return y&&m&&d?`${d}/${m}/${y}`:iso};
+  const statusInfo=s=>({
+    negativa:['Negativa','ok'],positiva_efeito_negativa:['Positiva c/ efeito de negativa','ok'],positiva:['Positiva','bad']
+  }[s]||['Aguardando','empty']);
+  function ensure(){
+    if(document.getElementById('dreamDashboard')) return;
+    const root=document.createElement('div');root.id='dreamDashboard';
+    root.innerHTML=`
+      <div class="dash-topbar">
+        <div class="dash-search"><span class="ico">⌕</span><input id="dashCnpj" placeholder="Digite o CNPJ para consultar..."></div>
+        <button class="dash-consult" id="dashConsult">Consultar</button>
+        <div class="dash-top-spacer"></div><div class="dash-theme">☼</div>
+        <div class="dash-user"><div class="dash-avatar">CG</div><div><b>Controladoria</b><small>Município de Horizonte/CE</small></div></div>
+      </div>
+      <main class="dash-main">
+        <section class="dash-hero"><div class="hero-doc">⌕</div><div><h2>Emita e gerencie certidões de forma automática</h2><p>Conecte-se aos principais órgãos, consulte a situação fiscal e armazene os documentos com segurança.</p><div class="hero-features"><span>Processo automático</span><span>Dados seguros</span><span>Histórico organizado</span></div></div><div class="hero-note">Mais controle<br>para uma gestão<br>mais eficiente.</div></section>
+        <section class="consult-summary"><div class="sum-block"><div class="sum-label">CNPJ CONSULTADO</div><div class="sum-value" id="sumCnpj">—</div></div><div class="sum-block"><div class="sum-label">EMPRESA</div><div class="sum-value sum-company" id="sumEmpresa">—</div><div class="sum-ok" id="sumStatus">● Consulta pronta</div></div><div class="sum-block"><div class="sum-label">DATA DA CONSULTA</div><div class="sum-value" id="sumData">—</div></div><button class="new-query" id="newQuery">↻ Nova consulta</button></section>
+        <section class="dash-runbar" id="dashRunbar">
+          <button class="dash-run-btn primary" id="dashStart">▶ Iniciar consultas</button>
+          <button class="dash-run-btn secondary" id="dashResume" disabled>✓ Continuar</button>
+          <button class="dash-run-btn danger" id="dashStop" disabled>■ Parar</button>
+          <div class="dash-run-status"><div class="dash-run-status-top"><b id="dashRunText">Pronto para iniciar.</b><span id="dashRunPct">0%</span></div><div class="dash-run-track"><div class="dash-run-fill" id="dashRunFill"></div></div></div>
+          <div class="dash-human" id="dashHuman">⚠ Ação necessária: resolva o CAPTCHA na janela do portal. A Central continuará automaticamente.</div>
+        </section>
+        <section class="stepper" id="dashStepper"></section>
+        <section class="cert-cards" id="dashCards"></section>
+        <section class="doc-workspace"><aside class="doc-menu"><div class="doc-back">← Voltar</div><div class="doc-tab active">▣ &nbsp; Documento</div><div class="doc-tab">☷ &nbsp; Dados extraídos</div><div class="doc-tab">♢ &nbsp; Autenticidade</div><div class="doc-tab">▤ &nbsp; Observações</div></aside><div class="pdf-pane"><div class="pdf-toolbar"><b id="pdfTitle">Documento</b><span>Use os controles do leitor PDF para zoom e impressão</span></div><div class="pdf-frame" id="pdfFrame"></div></div><aside class="info-pane" id="infoPane"></aside></section>
+        <footer class="dash-footer"><span>Central de Certidões | Controladoria Geral do Município de Horizonte/CE</span><span>Versão 2.9.3.5</span></footer>
+      </main>`;
+    document.querySelector('.wrap').prepend(root);
+    const d=document.getElementById('dashCnpj'); const old=document.getElementById('cnpj');
+    d.value=old?.value||''; d.addEventListener('input',()=>{old.value=d.value;old.dispatchEvent(new Event('input',{bubbles:true}));});
+    old?.addEventListener('input',()=>{if(d!==document.activeElement)d.value=old.value;render();});
+    const startLegacy=()=>document.getElementById('btnConsultarTodas')?.click();
+    document.getElementById('dashConsult').onclick=()=>{hydrateArchive();render();};
+    document.getElementById('dashStart').onclick=startLegacy;
+    document.getElementById('dashResume').onclick=()=>document.getElementById('btnContinuar')?.click();
+    document.getElementById('dashStop').onclick=()=>document.getElementById('btnParar')?.click();
+    document.getElementById('newQuery').onclick=()=>{d.value='';old.value='';old.dispatchEvent(new Event('input',{bubbles:true}));document.getElementById('razaoSocial').value='';resetFormulario();selectedKey='federal';render();d.focus();};
+  }
+  function syncRunControls(){
+    const legacyStart=document.getElementById('btnConsultarTodas');
+    const legacyResume=document.getElementById('btnContinuar');
+    const legacyStop=document.getElementById('btnParar');
+    const start=document.getElementById('dashStart'); const resume=document.getElementById('dashResume'); const stop=document.getElementById('dashStop');
+    if(start&&legacyStart) start.disabled=legacyStart.disabled;
+    if(resume&&legacyResume) resume.disabled=legacyResume.disabled;
+    if(stop&&legacyStop) stop.disabled=legacyStop.disabled;
+    const txt=document.getElementById('v2ProgressText')?.textContent?.trim()||'Pronto para iniciar.';
+    const runText=document.getElementById('dashRunText'); if(runText) runText.textContent=txt;
+    const oldFill=document.getElementById('v2ProgressBar'); const fill=document.getElementById('dashRunFill');
+    let pct=0; if(oldFill){ const raw=(oldFill.style.width||'').match(/([0-9.]+)/); if(raw)pct=Math.max(0,Math.min(100,Number(raw[1]))); }
+    if(fill)fill.style.width=pct+'%'; const pctEl=document.getElementById('dashRunPct'); if(pctEl)pctEl.textContent=Math.round(pct)+'%';
+    const humanOld=document.getElementById('v2Human'); const human=document.getElementById('dashHuman');
+    if(human){ human.classList.toggle('show', !!humanOld && !humanOld.classList.contains('v2-hidden')); const msg=document.getElementById('v2HumanMsg')?.textContent?.trim(); if(msg&&human.classList.contains('show')) human.textContent='⚠ Ação necessária: '+msg; }
+  }
+  function render(){
+    ensure();
+    syncRunControls();
+    const oldCnpj=document.getElementById('cnpj')?.value||''; const company=document.getElementById('razaoSocial')?.value||'';
+    document.getElementById('sumCnpj').textContent=fmtCnpj(oldCnpj)||'—'; document.getElementById('sumEmpresa').textContent=company||'Empresa consultada'; document.getElementById('sumData').textContent=new Date().toLocaleString('pt-BR',{dateStyle:'short',timeStyle:'short'});
+    const keys=['federal','fgts','trabalhista','ceara','municipal'];
+    const step=document.getElementById('dashStepper');step.innerHTML=keys.map(k=>{const done=state?.[k]?.status;return `<div class="step ${done?'':'pending'}"><div class="step-dot">${done?'✓':'·'}</div><div class="step-label">${ORG_META[k].name}</div></div>`}).join('');
+    const cards=document.getElementById('dashCards');cards.innerHTML=keys.map(k=>{const s=state?.[k]||{};const [label,cl]=statusInfo(s.status);return `<article class="cert-card ${k===selectedKey?'active':''}" data-k="${k}"><div class="card-brand"><div class="org-icon">${ORG_META[k].icon}</div><div><h3>${ORG_META[k].name}</h3><div class="sub">${ORG_META[k].sub}</div></div></div><div class="status-pill ${cl==='ok'?'':cl}">● ${label}</div><div class="valid-line">▣ &nbsp; ${s.validade?'Válida até '+fmtDate(s.validade):'Validade não informada'}</div><button class="details-btn">Ver detalhes &nbsp;→</button></article>`}).join('');
+    cards.querySelectorAll('.cert-card').forEach(el=>{el.tabIndex=0;el.setAttribute('role','button');const select=()=>{selectedKey=el.dataset.k;render();window.centralShowTab?.('Documento');};el.onclick=select;el.onkeydown=e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();select();}};});
+    const s=state?.[selectedKey]||{}; const meta=ORG_META[selectedKey]; const [label,cl]=statusInfo(s.status); const url=s.pdfUrl||''; const viewUrl=s.viewUrl||url; const downloadUrl=s.downloadUrl||url;
+    document.getElementById('pdfTitle').textContent=s.pdfNome||({federal:'CND FEDERAL.pdf',fgts:'CRF FGTS.pdf',trabalhista:'CND TRABALHISTA.pdf',ceara:'CND ESTADUAL.pdf',municipal:'CND MUNICIPAL.pdf'}[selectedKey]);
+    const frameKey=cnpjDigits()+'|'+selectedKey+'|'+viewUrl;
+    if(lastFrame!==frameKey){lastFrame=frameKey;document.getElementById('pdfFrame').innerHTML=viewUrl?`<iframe src="${viewUrl}#toolbar=1&navpanes=0"></iframe>`:`<div class="pdf-placeholder"><div><div style="font-size:42px">▧</div><b>Nenhum PDF arquivado ainda</b><div style="font-size:12px;margin-top:7px">Quando a certidão for emitida, o documento aparecerá aqui automaticamente.</div></div></div>`;
+    }
+    window.centralPreviewPdf?.(viewUrl);
+    const verify=ORGAOS.find(o=>o.key===selectedKey)?.verifyUrl||'#';
+    document.getElementById('infoPane').innerHTML=`<h4>▣ &nbsp; Informações extraídas do PDF</h4><div class="info-row"><span>Situação</span><strong><span class="status-pill ${cl==='ok'?'':cl}" style="margin:0;padding:5px 7px">● ${label}</span></strong></div><div class="info-row"><span>Data de validade</span><strong>▣ &nbsp; ${fmtDate(s.validade)}</strong></div><div class="info-row"><span>Código de controle</span><strong>${String(s.numero||'—').replace(/[&<>"']/g,c=>'&#'+c.charCodeAt(0)+';')}</strong></div><div class="info-actions">${viewUrl?`<a class="primary" target="_blank" rel="noopener" href="${viewUrl}">🖨 &nbsp; Abrir / imprimir PDF</a><a href="${downloadUrl}" download="${s.pdfNome||'CERTIDAO.pdf'}">⇩ &nbsp; Baixar PDF</a>`:`<button class="primary" onclick="document.getElementById('file-${selectedKey}')?.click()">Adicionar PDF</button>`}${verify!=='#'?`<a target="_blank" rel="noopener" href="${verify}">↗ &nbsp; Verificar autenticidade</a>`:'<span>Verifique no portal da prefeitura indicada no PDF.</span>'}<button onclick="document.getElementById('file-${selectedKey}')?.click()">${viewUrl?'Substituir PDF':'Anexar PDF manual'}</button></div>`;
+  }
+  let archiveHydrateBusy=false;
+  async function hydrateArchive(){
+    if(archiveHydrateBusy) return;
+    const digits=(document.getElementById('cnpj')?.value||'').replace(/\D/g,'');
+    if(digits.length!==14) return;
+    archiveHydrateBusy=true;
+    try{
+      const r=await fetch('/api/archive/'+digits,{cache:'no-store'});
+      if(!r.ok) return;
+      const a=await r.json();
+      if(cnpjDigits()!==digits)return;
+      let changed=false;
+      for(const [key,cert] of Object.entries(a.certificates||{})){
+        if(!cert?.fileUrl) continue;
+        const org=ORGAOS.find(o=>o.key===key); if(!org) continue;
+        const prev=state[key]||{};
+        if(prev.pdfUrl===cert.fileUrl) continue;
+        state[key]={...prev,source:cert.source||'',archivedAt:cert.archivedAt||'',status:cert.status||prev.status||'',validade:cert.validade||prev.validade||'',numero:cert.numero||prev.numero||'',verificado:prev.verificado||false,org,pdfUrl:cert.fileUrl,viewUrl:cert.viewUrl||cert.fileUrl,downloadUrl:cert.downloadUrl||cert.fileUrl,pdfNome:cert.fileName||archivedPdfName(org)};
+        document.getElementById(`sel-${key}`) && (document.getElementById(`sel-${key}`).value=state[key].status||'');
+        document.getElementById(`date-${key}`) && (document.getElementById(`date-${key}`).value=state[key].validade||'');
+        document.getElementById(`numero-${key}`) && (document.getElementById(`numero-${key}`).value=state[key].numero||'');
+        showArchivedPdf(org,cert.fileUrl,state[key].pdfNome); changed=true;
+      }
+      if(changed){ salvarNoHistorico(); renderConsolidado(); }
+    }catch(_){} finally{archiveHydrateBusy=false;}
+  }
+  window.renderDreamDashboard=render;
+  window.addEventListener('DOMContentLoaded',()=>{setTimeout(()=>{render();hydrateArchive();},120);setInterval(()=>{hydrateArchive();syncRunControls();const signature=JSON.stringify(state)+cnpjDigits()+document.getElementById('razaoSocial').value;if(window.centralSignature!==signature){window.centralSignature=signature;render();}},1400)});
+})();
+</script>
+<script src="interface-fixes.js"></script>
+</body>
+</html>
