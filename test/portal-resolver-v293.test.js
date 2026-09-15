@@ -27,3 +27,10 @@ test('individual consultation selects only the requested certificate', () => {
   assert.equal(portalForCertificate(company,'municipal').key,'municipal');
   assert.equal(portalForCertificate(company,'invalid'),null);
 });
+
+test('Alcântaras routes to its officially linked contributor certificate', () => {
+  const portal=portalsForCompany({uf:'CE',municipio:'ALCANTARAS'}).find(p=>p.key==='municipal');
+  assert.equal(portal.url,'https://servicostrimap.com.br/alcantaras.ce/cnd/contribuinte/');
+  assert.equal(portal.selectors.cnpj[0],'input[name="cpfCnpj"]');
+  assert.match(portal.afterCaptchaActions[0].selectors[0],/Realizar Consulta/);
+});

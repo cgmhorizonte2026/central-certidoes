@@ -24,6 +24,13 @@ function municipalPortal(company) {
   const code = String(company?.municipio_codigo_ibge || company?.codigo_municipio_ibge || '') || municipalityCodes.get(normalize(company?.municipio));
   const entry = municipal[code];
   if (!entry) return null;
+  if (code === '2300507') return {
+    key:'municipal', name:'Municipal · Alcântaras', shortName:'Municipal', url:entry.url,
+    verifyUrl:entry.verifyUrl, selectors:{cnpj:['input[name="cpfCnpj"]','input[id$="_cpfCnpj"]']},
+    humanCaptcha:false, preActions:[], beforeCaptchaActions:[],
+    afterCaptchaActions:[{name:'Realizar Consulta',selectors:['button[type="submit"]:has-text("Realizar Consulta")','button:has-text("Realizar Consulta")'],captureDownload:true,downloadTimeout:15000,waitMs:1800}],
+    downloadButtons:['text=Reimprimir Certidão','text=Imprimir','text=Baixar','text=Download','text=PDF']
+  };
   if (code === '2304400') return {
     key:'municipal', name:'Municipal · Fortaleza', shortName:'Municipal', url:entry.url,
     verifyUrl:entry.verifyUrl || entry.sourceUrl || entry.url,

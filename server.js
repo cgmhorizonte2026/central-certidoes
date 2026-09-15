@@ -166,7 +166,7 @@ async function lookupCompany(cnpj) {
         nome_fantasia: r.data.fantasia || '',
         uf: String(r.data.uf || '').toUpperCase(),
         municipio: r.data.municipio || '',
-        logradouro: [r.data.tipo, r.data.logradouro].filter(Boolean).join(' '),
+        logradouro: String(r.data.logradouro || '').replace(/^\s*MATRIZ\s+/i, ''),
         numero: r.data.numero || '', complemento: r.data.complemento || '', bairro: r.data.bairro || '', cep: String(r.data.cep || ''),
         fonte: 'ReceitaWS'
       };
