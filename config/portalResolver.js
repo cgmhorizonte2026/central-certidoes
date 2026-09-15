@@ -24,6 +24,15 @@ function municipalPortal(company) {
   const code = String(company?.municipio_codigo_ibge || company?.codigo_municipio_ibge || '') || municipalityCodes.get(normalize(company?.municipio));
   const entry = municipal[code];
   if (!entry) return null;
+  if (code === '2304400') return {
+    key:'municipal', name:'Municipal · Fortaleza', shortName:'Municipal', url:entry.url,
+    verifyUrl:entry.verifyUrl || entry.sourceUrl || entry.url,
+    selectors:{cnpj:['#pesquisaForm\\:cnpjPessoaDec\\:cnpj','input[name="pesquisaForm:cnpjPessoaDec:cnpj"]','input[alt="cnpj" i]']},
+    preActions:[{name:'Selecionar Pessoa Jurídica / CNPJ',selectors:['#pesquisaForm\\:tipoPessoaDecorate\\:j_id358\\:1','input[name="pesquisaForm:tipoPessoaDecorate:j_id358"][value="J"]','label:has-text("Jurídica")'],waitMs:1800,required:true}],
+    humanCaptcha:'required', captchaTimeout:600000, beforeCaptchaActions:[],
+    afterCaptchaActions:[{name:'Emitir Certidão Municipal',selectors:['#pesquisaForm\\:btnEmitir','input[name="pesquisaForm:btnEmitir"]','input[value="Emitir"]'],captureDownload:true,downloadTimeout:30000,waitMs:2000}],
+    downloadButtons:['input[value*="Reimprimir Certid" i]','text=Reimprimir Certidão','text=Baixar','text=Download','text=Imprimir','text=PDF']
+  };
   const preActions = code === '2305233' ? [{ name:'Abrir Certidão de Contribuinte', selectors:['a:has-text("Certidão de Contribuinte")','text=Certidão de Contribuinte'], waitMs:1500, required:true }] : [];
   return { key:'municipal', name:entry.name, shortName:'Municipal', url:entry.url, verifyUrl:entry.verifyUrl || entry.sourceUrl || entry.url, selectors, humanCaptcha:false, preActions, beforeCaptchaActions:[], afterCaptchaActions:[], downloadButtons:['text=Emitir certidões','text=Emitir CND','text=Certidão Negativa','text=Imprimir','text=Baixar','text=PDF'] };
 }
