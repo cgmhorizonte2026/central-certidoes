@@ -4,7 +4,7 @@ const runtime=path.join(__dirname,'..','.runtime');
 if(!process.env.PLAYWRIGHT_BROWSERS_PATH)process.env.PLAYWRIGHT_BROWSERS_PATH=path.join(runtime,'browsers');
 const {chromium}=require('playwright');
 const {launchBrowser}=require('./launch');
-async function openRobotBrowser({root,actor,cnpj,portalKey,headless=false,log=()=>{}}){
+async function openRobotBrowser({root,actor,cnpj,portalKey,headless=true,log=()=>{}}){
  const extension=path.resolve(process.env.BUSTER_EXTENSION_PATH||path.join(runtime,'buster-3.4.0'));
  const enabled=portalKey!=='federal'&&process.env.CAPTCHA_METHOD!=='manual';
  if(!enabled||!fs.existsSync(path.join(extension,'manifest.json'))||!fs.existsSync(chromium.executablePath())){

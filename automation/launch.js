@@ -1,5 +1,5 @@
 const { chromium } = require('playwright');
-async function launchBrowser(headless = false) {
+async function launchBrowser(headless = true) {
   try { return await chromium.launch({ channel: process.env.BROWSER_CHANNEL || 'msedge', headless }); }
   catch (error) {
     try { return await chromium.launch({ headless }); }

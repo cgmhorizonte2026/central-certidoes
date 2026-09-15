@@ -2,6 +2,8 @@ const crypto = require('node:crypto');
 const { trustedUrl } = require('../config/registry');
 const {isoDate,today}=require('../lib/domain');
 const {federalSecurityError}=require('./federal-support');
+const {handleFederalCookies}=require('./federal-cookies');
+const {navigateMunicipal}=require('./municipal-navigation');
 const runtime = new WeakMap();
 const terminal = job => ['finished','cancelled','error','capturing'].includes(job.status);
 const editable = 'input:not([type=radio]):not([type=checkbox]):not([type=hidden]):not([type=submit]):not([type=button])';
@@ -83,6 +85,8 @@ async function advance(job,audit=()=>{}) {
     let trusted=false,blocked=false,filled=false;
     for(const page of job.context.pages())for(const frame of page.frames()){
       if(!trustedUrl(frame.url(),job.portal))continue;trusted=true;
+      const cookies=state.federalSubmitted?await handleFederalCookies(frame,job,audit):null;
+      if(cookies)return cookies;
       const body=await frame.locator('body').innerText({timeout:2500});
       if(new URL(frame.url()).hostname==='grpfordam.sefin.fortaleza.ce.gov.br'){
         const modal=frame.locator('form#modalReimpressaoForm');
@@ -101,13 +105,14 @@ async function advance(job,audit=()=>{}) {
         if(await visible(frame.locator('#gifAguarde')))return {status:'awaiting_response',message:'O município está processando a solicitação. Aguardando o término do carregamento.'};
       }
       if(new URL(frame.url()).hostname==='servicos.receitafederal.gov.br'&&state.filled){
+        if(state.federalSubmittedAt&&Date.now()-state.federalSubmittedAt>60000)return {status:'awaiting_user',message:'A Receita não concluiu a etapa em 60 segundos. O próximo comando automático foi suspenso para evitar duplicidade. Confira a página interativa ou cancele a consulta.'};
         const renew=frame.getByRole('button',{name:/^Emitir nova certid[aã]o$/i});
         if(await visible(renew)){
           if(!await renew.isEnabled())return {status:'awaiting_response',message:'Aguardando a Receita habilitar a confirmação de nova emissão.'};
           const security=await challenge(frame);
           if(security.blocked)return {status:'captcha_required',message:'A Receita solicitou verificação de segurança antes da nova emissão.'};
           if(!state.actions.has('federal_new_certificate')){
-            state.actions.add('federal_new_certificate');await renew.click({timeout:5000});
+            state.actions.add('federal_new_certificate');state.federalSubmittedAt=Date.now();await renew.click({timeout:5000});
             audit({type:'automatic_issuance_attempt',cnpj:job.cnpj,jobId:job.id,portal:job.portal.key,action:'Emitir nova certidão'});
           }
           return {status:'awaiting_response',message:'Aviso de certidão existente identificado. Nova emissão solicitada à Receita; aguardando o PDF.'};
@@ -136,6 +141,8 @@ async function advance(job,audit=()=>{}) {
       filled=await prepare(frame,job)||filled;state.filled ||= filled;
       if(terminal(job))return null;
       const security=await challenge(frame);if(security.blocked){blocked=true;continue;}
+      const navigation=await navigateMunicipal(frame,job,state,audit);
+      if(navigation)return navigation;
       const host=new URL(frame.url()).hostname;
       if(host==='consultapublica.sefaz.ce.gov.br'&&await visible(frame.locator('#loadingOverlay')))return {status:'awaiting_response',message:'Pesquisa enviada à Sefaz. Aguardando a relação de certidões.'};
       if(host==='uruoca.ssinformatica.net'&&/Captcha\s+Campo obrigat[oó]rio/i.test(body)&&!security.completed)return {status:'captcha_required',message:'Uruoca exige CAPTCHA para liberar o PDF. Abra a janela interativa, conclua a verificação e continue a emissão.'};
@@ -184,7 +191,7 @@ async function advance(job,audit=()=>{}) {
             if(state.actions.size>=12)return {status:'awaiting_user',message:'O portal não concluiu a emissão após as etapas automáticas. Abra a janela do órgão para conferir a mensagem apresentada.'};
             state.actions.add(key); // A timeout can occur after a successful submission: never retry blindly.
             state.sent.set(base,security.fingerprint);
-            if(host==='servicos.receitafederal.gov.br')state.federalSubmitted=true;
+            if(host==='servicos.receitafederal.gov.br'){state.federalSubmitted=true;state.federalSubmittedAt=Date.now();}
             await button.click({timeout:5000});
             audit({type:'automatic_issuance_attempt',cnpj:job.cnpj,jobId:job.id,portal:job.portal.key,action:label});
             return {status:'awaiting_response',message:host==='servicos.receitafederal.gov.br'?'Clique em Emitir realizado. Aguardando a verificação de segurança e a resposta da Receita.':'CNPJ preenchido e solicitação enviada ao órgão. A Central acompanha o resultado e captura o PDF automaticamente.'};
@@ -192,10 +199,10 @@ async function advance(job,audit=()=>{}) {
         }
       }
     }
-    if(blocked&&state.filled)return {status:'captcha_required',message:'CNPJ e opções disponíveis preenchidos. Clique em Mostrar janela do órgão e resolva a verificação de segurança nessa janela. A Central continuará automaticamente.'};
-    if(!trusted)return {status:'awaiting_user',message:'O órgão abriu uma verificação de acesso ou página externa. Clique em Mostrar janela do órgão. A automação retomará quando o formulário oficial estiver disponível.'};
-    if(Date.now()-state.started<20000||state.actions.size)return {status:'awaiting_response',message:state.actions.size?'Solicitação enviada. Aguardando o PDF ou a próxima etapa do órgão. Se houver mensagem de erro, consulte Mostrar janela do órgão.':'Aguardando o formulário do órgão carregar para preencher o CNPJ automaticamente.'};
-    return {status:'awaiting_user',message:'Não foi identificado um formulário de emissão compatível nesta página. Abra Mostrar janela do órgão para verificar a navegação ou os dados adicionais solicitados.'};
+    if(blocked&&state.filled)return {status:'captcha_required',message:'CNPJ e opções disponíveis preenchidos. Clique em Abrir janela interativa e resolva a verificação de segurança no painel da Central. A Central continuará automaticamente.'};
+    if(!trusted)return {status:'awaiting_user',message:'O órgão abriu uma verificação de acesso ou página externa. Clique em Abrir janela interativa. A automação retomará quando o formulário oficial estiver disponível.'};
+    if(Date.now()-state.started<20000||state.actions.size)return {status:'awaiting_response',message:state.actions.size?'Solicitação enviada. Aguardando o PDF ou a próxima etapa do órgão. Se houver mensagem de erro, consulte Abrir janela interativa.':'Aguardando o formulário do órgão carregar para preencher o CNPJ automaticamente.'};
+    return {status:'awaiting_user',message:'Não foi identificado um formulário de emissão compatível nesta página. Abra Abrir janela interativa para verificar a navegação ou os dados adicionais solicitados.'};
   }finally{state.busy=false;}
 }
 module.exports={advance,prepare,challenge};

@@ -5,6 +5,8 @@ const { resolveCaptcha } = require('./captcha');
 const { trustedUrl } = require('../config/registry');
 const { parseCertificate } = require('../lib/domain');
 const { advance } = require('./issuer-engine');
+const {waitForFederalForm}=require('./federal-readiness');
+const {accessBlockMessage}=require('./access-block');
 const {advanceVerification}=require('./verification');
 const {userError}=require('../lib/errors');
 class PortalSessions {
@@ -44,7 +46,7 @@ class PortalSessions {
     job.files.push(cert.id); if(job.status!=='capturing')this.update(job, 'document_captured', 'PDF capturado do órgão. Conclua a sessão para guardar a evidência da tela.');
   }
   async open(job) {
-    Object.assign(job,await this.openBrowser({root:this.store.root,actor:job.actor,cnpj:job.cnpj,portalKey:job.portal.key,log:(method,message)=>this.log(job,method,message)}));
+    Object.assign(job,await this.openBrowser({root:this.store.root,actor:job.actor,cnpj:job.cnpj,portalKey:job.portal.key,headless:true,log:(method,message)=>this.log(job,method,message)}));
     if (job.status === 'cancelled') { await this.close(job); return; }
     this.log(job,job.browserMethod,job.browserNote);
     const attach = page => {
@@ -56,7 +58,7 @@ class PortalSessions {
       page.on('download', d => {
         this.track(job, (async () => {
           const blob=d.url().startsWith('blob:')&&trustedUrl(d.url().slice(5),job.portal)&&trustedUrl(page.url(),job.portal);
-          const dataPdf=job.portal.key==='federal'&&trustedUrl(page.url(),job.portal)&&d.url().startsWith('data:application/pdf');
+          const dataPdf=['federal','municipal'].includes(job.portal.key)&&trustedUrl(page.url(),job.portal)&&d.url().startsWith('data:application/pdf');
           if(!blob&&!dataPdf&&!trustedUrl(d.url(),job.portal))return;
           const stream=await d.createReadStream();if(!stream)return;let n=0;const chunks=[];
           for await(const chunk of stream){n+=chunk.length;if(n>15*1024*1024){stream.destroy();throw new Error('PDF excede 15 MB.');}chunks.push(chunk);}
@@ -78,17 +80,20 @@ class PortalSessions {
     job.context.on('page', attach); job.page = await job.context.newPage();
     await job.page.goto(job.mode === 'verify' ? job.portal.verifyUrl : job.portal.url, { waitUntil: 'domcontentloaded', timeout: 45000 });
     if(job.portal.key==='federal'&&job.mode==='issue'){
+      this.update(job,'opening','Aguardando o formulário da Receita para preencher o CNPJ e clicar em Emitir…');
       // Receita Federal is a SPA: DOMContentLoaded precedes the CNPJ form.
       const field=job.page.locator('input[name="niContribuinte"]');
       try{await field.waitFor({state:'visible',timeout:15000});}catch{
         const pj=job.page.getByText('Pessoa Jurídica',{exact:true}).first();
         if(await pj.isVisible()){await pj.click({timeout:5000});await field.waitFor({state:'visible',timeout:15000});}
       }
+      const ready=await waitForFederalForm(job,event=>this.store.audit(event,job.actor));
+      if(job.status==='cancelled')return;
+      if(!ready){job.federalPreparationFailed=true;this.update(job,'awaiting_user','A Receita não disponibilizou o formulário estável em 30 segundos. Nenhuma emissão foi enviada. Cancele esta consulta e tente novamente mais tarde.');this.startMonitoring(job);return;}
     }
     await this.guide(job);
     if(job.status==='cancelled')return;
     await this.guide(job);
-    await job.page.bringToFront();
     this.store.audit({ type: 'portal_opened', cnpj: job.cnpj, jobId: job.id, portal: job.portal.key, mode: job.mode, url: job.page.url() }, job.actor);
     this.startMonitoring(job);
   }
@@ -103,10 +108,11 @@ class PortalSessions {
   }
   live(id){const j=this.jobs.get(id);if(!j?.context||['finished','cancelled','error'].includes(j.status))throw Object.assign(new Error('Consulta encerrada. Inicie uma nova emissão.'),{status:409});return j;}
   activePage(job){const pages=job.context.pages();return pages.filter(p=>trustedUrl(p.url(),job.portal)).at(-1)||pages.find(p=>p===job.page)||pages.at(-1);}
-  async focus(id){const j=this.live(id);const page=this.activePage(j);await page.bringToFront();return {ok:true,message:'Janela do órgão selecionada. Procure o navegador aberto pela Central na barra de tarefas.'};}
+  async focus(id){this.live(id);return {ok:true,message:'Use Abrir janela interativa para acessar a página do órgão dentro da Central.'};}
   async preview(id){const j=this.live(id);return this.activePage(j).screenshot({timeout:10000});}
   async interact(id,input){
     const job=this.live(id),page=this.activePage(job);
+    if(job.accessBlocked)throw Object.assign(new Error(job.message),{status:409});
     if(['opening','capturing'].includes(job.status))throw Object.assign(new Error('Aguarde o carregamento da consulta.'),{status:409});
     if(!trustedUrl(page.url(),job.portal))throw Object.assign(new Error('A página atual está fora do domínio oficial cadastrado. Interação bloqueada.'),{status:409});
     if(input.action==='click'){
@@ -122,8 +128,14 @@ class PortalSessions {
   }
   async guide(job){
     if(['finished','cancelled','error','capturing'].includes(job.status))return;
+    if(job.federalPreparationFailed||job.accessBlocked)return;
+    if(job.portal.key==='fgts')for(const page of job.context.pages()){
+      const text=await page.locator('body').innerText({timeout:2500}).catch(()=>'');
+      const message=accessBlockMessage(text,job.portal.key);
+      if(message){job.accessBlocked=true;this.update(job,'awaiting_user',message);this.store.audit({type:'portal_access_blocked',jobId:job.id,portal:job.portal.key},job.actor);return;}
+    }
     job.currentUrl=this.activePage(job)?.url();
-    if(job.portal.key==='federal'&&!job.files.length){
+    if(['federal','municipal'].includes(job.portal.key)&&!job.files.length){
       for(const page of job.context.pages()){
         const blobPage=page.url().startsWith('blob:')&&trustedUrl(page.url().slice(5),job.portal);
         const owner=trustedUrl(page.url(),job.portal)?page:blobPage?await page.opener():null;

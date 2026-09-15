@@ -4,7 +4,7 @@ const visible=locator=>locator.isVisible().catch(()=>false);
 function recaptchaFrame(url){try{const u=new URL(url);return u.protocol==='https:'&&['google.com','www.google.com','recaptcha.net','www.recaptcha.net'].includes(u.hostname)&&/^\/recaptcha\/(api2|enterprise)\/(anchor|bframe)$/.test(u.pathname);}catch{return false;}}
 async function resolveCaptcha(job,log=()=>{},now=Date.now()){
  let state=sessions.get(job);if(!state){state={started:now,anchor:false,attempts:0,lastAttempt:0,busy:false};sessions.set(job,state);}
- const manual=message=>({status:'captcha_required',message:`${message} Clique em Mostrar janela do órgão para concluir. O robô retomará após a resposta.`});
+ const manual=message=>({status:'captcha_required',message:`${message} Clique em Abrir janela interativa para concluir. O robô retomará após a resposta.`});
  if(state.busy)return {status:'captcha_solving',message:'Buster está tentando resolver o desafio de áudio.'};
  if(!job.busterAvailable)return manual(job.browserNote||'Buster não está disponível nesta sessão.');
  state.busy=true;
