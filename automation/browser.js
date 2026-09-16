@@ -109,11 +109,13 @@ class BrowserManager {
       const selectors = [
         'iframe[src*="recaptcha"]', 'iframe[title*="reCAPTCHA" i]',
         'iframe[src*="hcaptcha"]', 'iframe[title*="hCaptcha" i]',
-        '.g-recaptcha', '.h-captcha', '[data-sitekey]'
+        'iframe[src*="challenges.cloudflare.com"]',
+        '.g-recaptcha', '.h-captcha', '.cf-turnstile', '[data-sitekey]',
+        'input[name*="captcha" i]:not([type="hidden"])', 'input[id*="captcha" i]:not([type="hidden"])'
       ];
       for (const selector of selectors) if (await page.locator(selector).count()) return true;
       const body = (await page.locator('body').innerText().catch(() => '')).toLowerCase();
-      return /não sou um robô|nao sou um robo|i'm not a robot|captcha/.test(body);
+      return /não sou um robô|nao sou um robo|i'm not a robot|captcha|verifique que você é humano|verifique que voce e humano|verify you are human|turnstile/.test(body);
     } catch (_) { return false; }
   }
 

@@ -309,6 +309,66 @@ async function recoverPdfFromPrintPages(context, timeout = 12000) {
   return null;
 }
 
+const normalText = value => String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/\s+/g,' ').trim();
+
+async function findSafeContinuation(context) {
+  const choices=[];
+  for(const candidatePage of [...context.pages()].reverse()) {
+    if(candidatePage.isClosed()) continue;
+    for(const frame of candidatePage.frames()) {
+      const elements=frame.locator('button, input[type="submit"], input[type="button"], [role="button"], a.btn, a[role="button"]');
+      const count=Math.min(await elements.count().catch(()=>0),80);
+      for(let i=0;i<count;i++) {
+        const element=elements.nth(i);
+        if(!await element.isVisible().catch(()=>false) || !await element.isEnabled().catch(()=>false)) continue;
+        const info=await element.evaluate(el=>{
+          const container=el.closest('[role="dialog"],dialog,.modal,[aria-modal="true"],form,section,main')||el.parentElement;
+          return {text:(el.innerText||el.value||el.getAttribute('aria-label')||el.title||'').trim(),context:(container?.innerText||'').trim().slice(0,1600),tag:el.tagName,role:el.getAttribute('role')||'',name:el.getAttribute('name')||'',id:el.id||''};
+        }).catch(()=>null);
+        if(!info)continue;
+        const text=normalText(info.text),contextText=normalText(info.context);
+        const positive=/^(confirmar(?: certidao)?|continuar|prosseguir|gerar(?: certidao)?|emitir(?: certidao)?|visualizar(?: certidao)?|consultar)$/.test(text);
+        const negative=/cancelar|sair|voltar|fechar|limpar|nova emissao|novo/.test(text);
+        const issuance=/certidao|certificado|debitos?|emissao|geracao/.test(contextText);
+        const modal=/confirm|deseja|prosseguir|continuar|emitir|gerar/.test(contextText)&&/certidao|documento/.test(contextText);
+        if(positive&&!negative&&issuance&&(modal||/dialog|modal/.test(normalText(`${info.role} ${info.id} ${info.name}`)))) choices.push({element,page:candidatePage,frame,info,score:(modal?5:0)+(text.includes('certidao')?3:0)+(text.startsWith('confirmar')?2:0)});
+      }
+    }
+  }
+  choices.sort((a,b)=>b.score-a.score);
+  if(!choices.length)return null;
+  if(choices.length>1&&choices[0].score===choices[1].score&&normalText(choices[0].info.text)!==normalText(choices[1].info.text))return null;
+  return choices[0];
+}
+
+async function saveUnknownState({page,portal,baseDir,previousAction,emit,history}) {
+  const dir=path.join(baseDir,'data','diagnostics',`${portal.key}-${Date.now()}`);fs.mkdirSync(dir,{recursive:true});
+  const screenshot=path.join(dir,'screen.png'),htmlFile=path.join(dir,'page.html'),jsonFile=path.join(dir,'state.json');
+  await page.screenshot({path:screenshot,fullPage:true}).catch(()=>{});
+  const html=await page.content().catch(()=>'');fs.writeFileSync(htmlFile,html.slice(0,2_000_000));
+  const interactive=await page.locator('button,input,select,a,[role="button"]').evaluateAll(nodes=>nodes.slice(0,100).map(el=>({tag:el.tagName,text:(el.innerText||el.value||el.getAttribute('aria-label')||'').trim(),id:el.id||'',name:el.getAttribute('name')||'',type:el.getAttribute('type')||''}))).catch(()=>[]);
+  const diagnostic={status:'ESTADO_DESCONHECIDO',municipio:portal.name,url:page.url(),etapaAnterior:previousAction,history,interactive};fs.writeFileSync(jsonFile,JSON.stringify(diagnostic,null,2));
+  emit({type:'unknown_state',status:'ESTADO_DESCONHECIDO',portal:portal.key,url:page.url(),diagnosticDir:dir,message:'O portal apresentou uma etapa que não pôde ser interpretada com segurança.'});
+  return diagnostic;
+}
+
+async function continueIssuanceFlow({page,context,browser,portal,baseDir,emit,maxSteps=8}) {
+  const history=[];let previousAction='emissão inicial';
+  for(let step=1;step<=maxSteps;step++) {
+    await page.waitForTimeout(800).catch(()=>{});
+    const pdfBuffer=await recoverPdfFromPrintPages(context,8000);if(pdfBuffer)return {pdfBuffer,history,status:'DOCUMENTO_GERADO'};
+    const livePages=[...context.pages()].filter(p=>!p.isClosed());
+    let captchaPage=null;for(const candidate of livePages){if(await browser.captchaPresent(candidate)){captchaPage=candidate;break;}}
+    if(captchaPage){emit({type:'human_action_required',status:'AGUARDANDO_INTERACAO_USUARIO',portal:portal.key,message:'O órgão exige uma verificação humana. Resolva o CAPTCHA na mesma janela; a Central continuará desta etapa.'});await browser.waitForCaptcha(captchaPage,'Conclua a verificação humana na janela do órgão. A sessão, os cookies e os dados preenchidos serão mantidos.',600000,true);page=captchaPage;history.push({step,type:'captcha_resolvido',url:page.url()});continue;}
+    const next=await findSafeContinuation(context);
+    if(!next){await saveUnknownState({page:livePages.at(-1)||page,portal,baseDir,previousAction,emit,history});return {history,status:'ESTADO_DESCONHECIDO'};}
+    const beforeUrl=next.page.url(),action=next.info.text;emit({type:'continuation_action',portal:portal.key,step,action,url:beforeUrl,message:`Etapa ${step}: ${action}`});
+    await next.element.click({timeout:7000});history.push({step,action,url:beforeUrl,at:new Date().toISOString()});previousAction=action;page=next.page;
+  }
+  emit({type:'continuation_limit',status:'ESTADO_DESCONHECIDO',portal:portal.key,history,message:`Limite de ${maxSteps} etapas atingido para evitar repetição.`});
+  return {history,status:'ESTADO_DESCONHECIDO'};
+}
+
 async function waitForPdfNavigation(page, timeout = 20000) {
   const started = Date.now();
   while (Date.now() - started < timeout) {
@@ -717,6 +777,19 @@ async function runPortal({ portal, cnpj, browser, baseDir, emit }) {
     if (clicked) await page.waitForTimeout(action.waitMs || 2200);
   }
 
+  // A emissão pode abrir uma ou mais confirmações intermediárias depois da
+  // ação inicial. Reavalia o DOM, modais, CAPTCHA e novas páginas até chegar a
+  // um estado terminal, sem clicar em elementos fora do contexto da emissão.
+  if (!download && !pdfBuffer) {
+    const continuation = await continueIssuanceFlow({
+      page, context: browser.context, browser, portal, baseDir, emit, maxSteps: 8
+    });
+    if (continuation.pdfBuffer) pdfBuffer = continuation.pdfBuffer;
+    if (continuation.status === 'ESTADO_DESCONHECIDO') {
+      throw new Error('ESTADO_DESCONHECIDO: o portal apresentou uma etapa não interpretada com segurança.');
+    }
+  }
+
   if (!download && !pdfBuffer && portal.existingCertificate) {
     const existing = await captureExistingCertificate(page, browser.context, portal.existingCertificate, emit);
     if (existing?.download) download = existing.download;
@@ -802,4 +875,4 @@ async function runPortal({ portal, cnpj, browser, baseDir, emit }) {
   return { filePath };
 }
 
-module.exports = { runPortal };
+module.exports = { runPortal, findSafeContinuation, continueIssuanceFlow };
