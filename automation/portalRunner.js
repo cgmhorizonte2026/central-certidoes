@@ -179,15 +179,31 @@ async function capturePdfFromClick(page, context, selectors, timeout = 30000) {
 
       const downloadPromise = page.waitForEvent('download', { timeout }).catch(() => null);
       const popupPromise = page.waitForEvent('popup', { timeout: 10000 }).catch(() => null);
+      const navigationPromise = page.waitForNavigation({ timeout }).catch(() => null);
       const pdfResponsePromise = page.waitForResponse(r => {
         const ct = (r.headers()['content-type'] || '').toLowerCase();
         return ct.includes('application/pdf') || ct.includes('application/x-pdf');
       }, { timeout: timeout }).catch(() => null);
       await loc.click({ timeout: 7000 });
 
+      // O Fisco Web navega para uma URL assinada /imprimir/ exibida pelo
+      // leitor de PDF do Chrome, sem disparar um download tradicional.
+      for (let attempt = 0; attempt < 32; attempt++) {
+        const printPage = context.pages().find(candidate => /\/imprimir\//i.test(candidate.url()));
+        if (printPage) {
+          try {
+            const response = await fetch(printPage.url(), { signal: AbortSignal.timeout(12000) });
+            const body = Buffer.from(await response.arrayBuffer());
+            if (response.ok && looksLikePdf(body)) return { download: null, page: printPage, pdfBuffer: body };
+          } catch (_) {}
+        }
+        await page.waitForTimeout(250).catch(() => {});
+      }
+
       const winner = await Promise.race([
         downloadPromise.then(download => download ? ({ kind: 'download', download }) : null),
         popupPromise.then(popup => popup ? ({ kind: 'popup', popup }) : null),
+        navigationPromise.then(response => response ? ({ kind: 'navigation', response }) : null),
         pdfResponsePromise.then(response => response ? ({ kind: 'response', response }) : null),
         page.waitForTimeout(timeout).then(() => null)
       ]);
@@ -205,11 +221,32 @@ async function capturePdfFromClick(page, context, selectors, timeout = 30000) {
         }
       }
 
-      const pdfResponse = winner?.kind === 'response' ? winner.response : null;
+      const pdfResponse = ['response','navigation'].includes(winner?.kind) ? winner.response : null;
       if (pdfResponse) {
         try {
-          return { download: null, page, pdfBuffer: await pdfResponse.body() };
+          const contentType = String(pdfResponse.headers()['content-type'] || '').toLowerCase();
+          const body = await pdfResponse.body();
+          if (contentType.includes('pdf') || looksLikePdf(body)) return { download: null, page, pdfBuffer: body };
         } catch (_) {}
+      }
+
+      // Alguns portais abrem o PDF no visualizador interno do Chrome. Nesse
+      // caso o popup pode surgir depois de outra espera da corrida terminar.
+      // Inspeciona todas as páginas da sessão e confirma o conteúdo pelo MIME.
+      for (const candidate of [...context.pages()].reverse()) {
+        if (candidate.isClosed()) continue;
+        const candidatePdf = await extractPdfResponse(candidate, 12000);
+        if (candidatePdf) return { download: null, page: candidate, pdfBuffer: candidatePdf };
+        // URLs assinadas de impressão costumam ser públicas e o visualizador
+        // do Chrome pode ocultar a resposta da sessão CDP. Recupera a mesma
+        // URL diretamente e só aceita o resultado quando ele é de fato PDF.
+        if (/\/imprimir\//i.test(candidate.url())) {
+          try {
+            const response = await fetch(candidate.url(), { signal: AbortSignal.timeout(12000) });
+            const body = Buffer.from(await response.arrayBuffer());
+            if (response.ok && looksLikePdf(body)) return { download: null, page: candidate, pdfBuffer: body };
+          } catch (_) {}
+        }
       }
 
       const pdf = await extractPdfResponse(page, 12000);
@@ -248,11 +285,25 @@ async function captureExistingCertificate(page, context, config, emit) {
 
 async function extractPdfResponse(page, timeout = 12000) {
   const url = page.url();
-  if (/\.pdf(?:$|[?#])/i.test(url)) {
+  if (/^https?:/i.test(url)) {
     try {
       const response = await page.request.get(url, { timeout });
-      const ct = response.headers()['content-type'] || '';
-      if (ct.includes('pdf')) return await response.body();
+      const ct = String(response.headers()['content-type'] || '').toLowerCase();
+      const body = await response.body();
+      if (ct.includes('pdf') || looksLikePdf(body)) return body;
+    } catch (_) {}
+  }
+  return null;
+}
+
+async function recoverPdfFromPrintPages(context, timeout = 12000) {
+  for (const candidate of [...context.pages()].reverse()) {
+    const url = candidate.url();
+    if (!/\/imprimir\//i.test(url)) continue;
+    try {
+      const response = await fetch(url, { signal: AbortSignal.timeout(timeout) });
+      const body = Buffer.from(await response.arrayBuffer());
+      if (response.ok && looksLikePdf(body)) return body;
     } catch (_) {}
   }
   return null;
@@ -639,6 +690,11 @@ async function runPortal({ portal, cnpj, browser, baseDir, emit }) {
       clicked = !!result;
       if (result?.download) download = result.download;
       if (result?.pdfBuffer) pdfBuffer = result.pdfBuffer;
+      if (!download && !pdfBuffer) {
+        await page.waitForTimeout(1500).catch(() => {});
+        pdfBuffer = await recoverPdfFromPrintPages(browser.context);
+        if (pdfBuffer) clicked = true;
+      }
       if (!download && !pdfBuffer && controlledDownloadDir) {
         const recovered = await waitForPdfInDirectory(controlledDownloadDir, 5000);
         if (recovered) {
@@ -688,6 +744,11 @@ async function runPortal({ portal, cnpj, browser, baseDir, emit }) {
         emit({ type: 'download_recovered', portal: portal.key, message: 'PDF recuperado da pasta controlada desta emissão.' });
       }
     }
+  }
+
+  if (!download && !pdfBuffer && portal.provider === 'fisco-web') {
+    pdfBuffer = await recoverPdfFromPrintPages(browser.context);
+    if (pdfBuffer) emit({ type:'pdf_print_route_recovered', portal:portal.key, message:'PDF recuperado da rota oficial de impressão.' });
   }
 
   if (!download && !pdfBuffer) {
