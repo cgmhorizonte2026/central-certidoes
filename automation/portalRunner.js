@@ -691,7 +691,7 @@ async function runPortal({ portal, cnpj, browser, baseDir, emit }) {
   emit({ type: 'portal_opening', portal: portal.key, name: portal.name, url: portal.url });
   await page.goto(portal.url, { waitUntil: 'domcontentloaded', timeout: 60000 });
   await page.bringToFront().catch(() => {});
-  await page.waitForTimeout(1800);
+  await page.waitForTimeout(portal.key === 'municipal' ? 6000 : 1800);
 
   for (const action of (portal.preActions || [])) {
     const clicked = await clickFirstVisible(page, action.selectors || []);
