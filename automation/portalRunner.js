@@ -99,8 +99,11 @@ async function fillCnpj(page, selectors, cnpj, portalKey = '') {
   for (const scope of page.frames()) {
   for (const selector of (selectors?.cnpj || [])) {
     try {
-      const loc = scope.locator(selector).first();
-      if (!(await loc.count()) || !(await loc.isVisible())) continue;
+      const matches = scope.locator(selector); const matchCount = await matches.count();
+      if (!matchCount) continue;
+      for (let matchIndex=0; matchIndex<matchCount; matchIndex++) {
+      const loc = matches.nth(matchIndex);
+      if (!(await loc.isVisible())) continue;
       if (['radio','checkbox','hidden','submit','button'].includes(await loc.getAttribute('type'))) continue;
 
       const maxLength = Number(await loc.getAttribute('maxlength').catch(() => '')) || 0;
@@ -136,7 +139,8 @@ async function fillCnpj(page, selectors, cnpj, portalKey = '') {
         await page.waitForTimeout(800);
         const raw2 = String(await loc.inputValue().catch(() => ''));
         if (raw2.replace(/\D/g, '') === digits) return true;
-      }
+    }
+    }
     } catch (_) {}
   }
   }
@@ -726,6 +730,7 @@ async function runPortal({ portal, cnpj, browser, baseDir, emit }) {
       emit({ type:'service_catalog_detected', status:'CATALOGO_SERVICOS', portal:portal.key, step, action:label, url:service.page.url(), message:`Serviço municipal localizado: ${label}` });
       await service.element.click({ timeout:7000 });
       await service.page.waitForTimeout(1800).catch(() => {});
+      await service.page.waitForFunction(() => /dados para emiss[aã]o|cpf\/cnpj|tipo de filtro/i.test(document.body?.innerText||'') || [...document.querySelectorAll('input')].some(e => /__/.test(e.value||'')), {timeout:15000}).catch(() => {});
     }
   }
 
