@@ -761,6 +761,12 @@ async function runPortal({ portal, cnpj, browser, baseDir, emit }) {
     }
     throw new Error('CNPJ não confirmado no formulário de '+portal.name+'.');
   }
+  if (portal.key === 'municipal' && !(portal.afterCaptchaActions || []).length) {
+    for (const frame of page.frames()) {
+      const inputs=frame.locator('input'); const n=await inputs.count().catch(()=>0);
+      for(let i=n-1;i>=0;i--){const input=inputs.nth(i);const value=String(await input.inputValue().catch(()=>''));if(onlyDigits(value)===onlyDigits(cnpj)){await input.press('Enter').catch(()=>{});emit({type:'form_submit_attempt',portal:portal.key,method:'enter',message:'Formulário municipal sem botão explícito; consulta acionada pelo campo preenchido.'});break;}}
+    }
+  }
 
   // Alguns portais só apresentam o CAPTCHA depois que o usuário inicia a emissão.
   // A Receita Federal, em particular, precisa receber o comando de "Nova Certidão"
