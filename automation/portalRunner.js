@@ -190,6 +190,15 @@ async function capturePdfFromClick(page, context, selectors, timeout = 30000) {
       }, { timeout: timeout }).catch(() => null);
       await loc.click({ timeout: 7000 });
 
+      // Botões "Imprimir" de portais municipais normalmente executam
+      // window.print() na própria página, sem download ou popup. Gere o PDF
+      // diretamente pela sessão Chromium logo após o clique.
+      if (/imprimir|visualizar/i.test(selector)) {
+        await page.waitForTimeout(900).catch(() => {});
+        const printed = await printPageToPdf(page).catch(() => null);
+        if (printed && looksLikePdf(printed)) return { download: null, page, pdfBuffer: printed };
+      }
+
       // O Fisco Web navega para uma URL assinada /imprimir/ exibida pelo
       // leitor de PDF do Chrome, sem disparar um download tradicional.
       for (let attempt = 0; attempt < 32; attempt++) {
