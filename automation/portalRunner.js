@@ -345,12 +345,13 @@ async function findSafeContinuation(context) {
 async function findMunicipalCertificateService(context, seen=new Set()) {
   const candidates=[];
   for (const page of [...context.pages()].reverse()) for (const frame of page.frames()) {
-    const nodes=frame.locator('a,button,[role="button"],[onclick],.card,.service,.servico,.tile,[class*="card" i],[class*="service" i]');
+    const nodes=frame.locator('a,button,[role="button"],[onclick],.card,.service,.servico,.tile,.gpi-fav-card,[class*="service-card" i]');
     const count=Math.min(await nodes.count().catch(()=>0),160);
     for(let i=0;i<count;i++) {
       const el=nodes.nth(i); if(!await el.isVisible().catch(()=>false)||!await el.isEnabled().catch(()=>true)) continue;
-      const info=await el.evaluate(e=>({text:(e.innerText||e.getAttribute('aria-label')||e.title||'').replace(/\s+/g,' ').trim(),href:e.href||'',tag:e.tagName,id:e.id||'',className:String(e.className||'')})).catch(()=>null); if(!info||!info.text) continue;
-      const t=normalText(info.text); if(seen.has(t+'|'+info.href)) continue;
+      const info=await el.evaluate(e=>{const raw=(e.innerText||e.getAttribute('aria-label')||e.title||'').split(/\n/).map(x=>x.trim()).filter(Boolean);return {text:(raw[0]||'').replace(/\s+/g,' ').trim(),href:e.href||'',tag:e.tagName,id:e.id||'',className:String(e.className||'')}}).catch(()=>null); if(!info||!info.text) continue;
+      const t=normalText(info.text); if([...seen].some(key=>key.includes(t+'|'+info.href)|| (t+'|'+info.href).includes(key))) continue;
+      if (info.tag === 'IMG' && !info.href) continue;
       if(!/certidao|cnd|debito|tribut/.test(t)||/\b(iptu|itbi|alvara|acordo|tllf)\b/.test(t)&&!/certidao|cnd/.test(t)) continue;
       const score=(/certidao|cnd/.test(t)?6:0)+(/negativ|tribut|debito|contribuinte|fiscal/.test(t)?3:0);
       if(score>=7)candidates.push({element:el,page,frame,info,score});
