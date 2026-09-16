@@ -735,7 +735,7 @@ async function runPortal({ portal, cnpj, browser, baseDir, emit }) {
       page,
       `Resolva o CAPTCHA na janela do portal ${portal.name}. Depois de marcar o CAPTCHA, aguarde: a Central continuará automaticamente.`,
       portal.captchaTimeout || 300000,
-      portal.humanCaptcha === 'required'
+      false
     );
   }
 

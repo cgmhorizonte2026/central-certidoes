@@ -104,20 +104,17 @@ class BrowserManager {
     this.emit({ type: 'resumed' });
   }
 
-  async captchaPresent(page) {
+  async captchaState(page) {
+    const state={captcha_provider:'none',element_found:false,element_visible:false,iframe_visible:false,challenge_visible:false,user_input_visible:false,blocking_message_visible:false,captcha_active:false,detection_reason:''};
     try {
-      const selectors = [
-        'iframe[src*="recaptcha"]', 'iframe[title*="reCAPTCHA" i]',
-        'iframe[src*="hcaptcha"]', 'iframe[title*="hCaptcha" i]',
-        'iframe[src*="challenges.cloudflare.com"]',
-        '.g-recaptcha', '.h-captcha', '.cf-turnstile', '[data-sitekey]',
-        'input[name*="captcha" i]:not([type="hidden"])', 'input[id*="captcha" i]:not([type="hidden"])'
-      ];
-      for (const selector of selectors) if (await page.locator(selector).count()) return true;
-      const body = (await page.locator('body').innerText().catch(() => '')).toLowerCase();
-      return /não sou um robô|nao sou um robo|i'm not a robot|captcha|verifique que você é humano|verifique que voce e humano|verify you are human|turnstile/.test(body);
-    } catch (_) { return false; }
+      const selectors=[['iframe[src*="recaptcha"]','recaptcha'],['iframe[title*="reCAPTCHA" i]','recaptcha'],['iframe[src*="hcaptcha"]','hcaptcha'],['iframe[title*="hCaptcha" i]','hcaptcha'],['iframe[src*="challenges.cloudflare.com"]','turnstile'],['.g-recaptcha','recaptcha'],['.h-captcha','hcaptcha'],['.cf-turnstile','turnstile'],['[data-sitekey]','captcha'],['input[name*="captcha" i]:not([type="hidden"])','image/text'],['input[id*="captcha" i]:not([type="hidden"])','image/text']];
+      for(const [selector,provider] of selectors){const loc=page.locator(selector),count=await loc.count().catch(()=>0);if(!count)continue;state.element_found=true;for(let i=0;i<count;i++){const item=loc.nth(i),visible=await item.isVisible().catch(()=>false),box=await item.boundingBox().catch(()=>null),hidden=await item.getAttribute('aria-hidden').catch(()=>null);if(visible&&!!box&&box.width>8&&box.height>8&&hidden!=='true'){state.element_visible=true;state.captcha_provider=provider;if(selector.startsWith('iframe'))state.iframe_visible=true;if(/input/.test(selector))state.user_input_visible=true;}}}
+      const challenge=page.locator('[class*="challenge" i], [id*="challenge" i], [class*="captcha" i]');state.challenge_visible=await challenge.count().catch(()=>0)>0&&await challenge.first().isVisible().catch(()=>false);
+      const message=page.getByText(/não sou um robô|nao sou um robo|verifique que você é humano|verifique que voce e humano|verify you are human|captcha/i).first();state.blocking_message_visible=await message.isVisible().catch(()=>false);
+      state.captcha_active=state.element_visible||state.iframe_visible||state.user_input_visible||(state.challenge_visible&&state.blocking_message_visible);state.detection_reason=state.captcha_active?'controle ou desafio CAPTCHA visível e interativo':state.element_found?'componente CAPTCHA presente apenas no DOM, sem interação visível':'';if(state.element_found||state.blocking_message_visible)this.emit({type:'captcha_detection',...state});return state;
+    } catch (_) { return state; }
   }
+  async captchaPresent(page) { return (await this.captchaState(page)).captcha_active; }
 
   async captchaSolved(page) {
     try {
