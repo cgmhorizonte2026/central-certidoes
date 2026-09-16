@@ -316,7 +316,7 @@ async function findSafeContinuation(context) {
   for(const candidatePage of [...context.pages()].reverse()) {
     if(candidatePage.isClosed()) continue;
     for(const frame of candidatePage.frames()) {
-      const elements=frame.locator('button, input[type="submit"], input[type="button"], [role="button"], a.btn, a[role="button"]');
+      const elements=frame.locator('button, input[type="submit"], input[type="button"], [role="button"], a.btn, a[role="button"], a:has(img[src*="pdf" i]), a[href*="pdf" i]');
       const count=Math.min(await elements.count().catch(()=>0),80);
       for(let i=0;i<count;i++) {
         const element=elements.nth(i);
@@ -327,11 +327,12 @@ async function findSafeContinuation(context) {
         }).catch(()=>null);
         if(!info)continue;
         const text=normalText(info.text),contextText=normalText(info.context);
-        const positive=/^(confirmar(?: certidao)?|continuar|prosseguir|gerar(?: certidao)?|emitir(?: certidao)?|visualizar(?: certidao)?|consultar)$/.test(text);
+        const pdfAction=await element.locator('img[src*="pdf" i]').count().catch(()=>0)>0||/pdf/i.test(info.name+' '+info.id+' '+info.text);
+        const positive=pdfAction||/^(confirmar(?: certidao)?|continuar|prosseguir|gerar(?: certidao)?|emitir(?: certidao)?|visualizar(?: certidao)?|consultar)$/.test(text);
         const negative=/cancelar|sair|voltar|fechar|limpar|nova emissao|novo/.test(text);
         const issuance=/certidao|certificado|debitos?|emissao|geracao/.test(contextText);
         const modal=/confirm|deseja|prosseguir|continuar|emitir|gerar/.test(contextText)&&/certidao|documento/.test(contextText);
-        if(positive&&!negative&&issuance&&(modal||/dialog|modal/.test(normalText(`${info.role} ${info.id} ${info.name}`)))) choices.push({element,page:candidatePage,frame,info,score:(modal?5:0)+(text.includes('certidao')?3:0)+(text.startsWith('confirmar')?2:0)});
+        if(positive&&!negative&&issuance&&(pdfAction||modal||/dialog|modal/.test(normalText(`${info.role} ${info.id} ${info.name}`)))) choices.push({element,page:candidatePage,frame,info,score:(pdfAction?8:0)+(modal?5:0)+(text.includes('certidao')?3:0)+(text.startsWith('confirmar')?2:0)});
       }
     }
   }
@@ -357,6 +358,7 @@ async function continueIssuanceFlow({page,context,browser,portal,baseDir,emit,ma
   for(let step=1;step<=maxSteps;step++) {
     await page.waitForTimeout(800).catch(()=>{});
     const pdfBuffer=await recoverPdfFromPrintPages(context,8000);if(pdfBuffer)return {pdfBuffer,history,status:'DOCUMENTO_GERADO'};
+    for(const candidate of [...context.pages()].reverse()){const directPdf=await extractPdfResponse(candidate,5000);if(directPdf)return {pdfBuffer:directPdf,history,status:'DOCUMENTO_GERADO'};}
     const livePages=[...context.pages()].filter(p=>!p.isClosed());
     let captchaPage=null;for(const candidate of livePages){const captcha=await browser.captchaState(candidate);if(captcha.captcha_active&&captcha.blocking){captchaPage=candidate;break;}}
     if(captchaPage){emit({type:'human_action_required',status:'AGUARDANDO_INTERACAO_USUARIO',portal:portal.key,message:'O órgão exige uma verificação humana. Resolva o CAPTCHA na mesma janela; a Central continuará desta etapa.'});await browser.waitForCaptcha(captchaPage,'Conclua a verificação humana na janela do órgão. A sessão, os cookies e os dados preenchidos serão mantidos.',600000,true);page=captchaPage;history.push({step,type:'captcha_resolvido',url:page.url()});continue;}
