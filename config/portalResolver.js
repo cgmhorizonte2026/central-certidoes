@@ -45,6 +45,14 @@ function municipalPortal(company) {
   return { key:'municipal', name:entry.name, shortName:'Municipal', url:entry.url, verifyUrl:entry.verifyUrl || entry.sourceUrl || entry.url, selectors, humanCaptcha:false, preActions, beforeCaptchaActions:[], afterCaptchaActions:[], downloadButtons:['text=Emitir certidões','text=Emitir CND','text=Certidão Negativa','text=Imprimir','text=Baixar','text=PDF'] };
 }
 
+function discoveredMunicipalPortal(company, record) {
+  if (!record || record.status !== 'PORTAL_ENCONTRADO') return null;
+  const common={key:'municipal',name:`Municipal · ${company.municipio}`,shortName:'Municipal',url:record.certidao_url,verifyUrl:record.certidao_url,provider:record.provider,resolutionStatus:record.status,sourceUrl:record.fonte};
+  if(record.provider==='fisco-web')return {...common,selectors:{cnpj:['#cnpjcpf','input[name="cpf_cnpj"]','input[placeholder*="CPF/CNPJ" i]']},preActions:[{name:'Selecionar Certidão de Contribuinte',selectors:['input[name="tipo_certidao"][value="contribuinte"]','label:has-text("Certidão negativa/positiva de Contribuinte")'],required:true,waitMs:500}],humanCaptcha:false,beforeCaptchaActions:[],afterCaptchaActions:[{name:'Emitir Certidão',selectors:['button[type="submit"]:has-text("Emitir Certidão")','button:has-text("Emitir Certidão")'],captureDownload:true,downloadTimeout:20000,waitMs:1500}],downloadButtons:['text=Baixar','text=Imprimir','text=Download','text=PDF']};
+  if(record.provider==='trimap')return {...common,selectors:{cnpj:['input[name="cpfCnpj"]','input[id$="_cpfCnpj"]']},humanCaptcha:false,preActions:[],beforeCaptchaActions:[],afterCaptchaActions:[{name:'Realizar Consulta',selectors:['button:has-text("Realizar Consulta")'],captureDownload:true,downloadTimeout:15000,waitMs:1800}],downloadButtons:['text=Reimprimir Certidão','text=Imprimir','text=Baixar','text=PDF']};
+  return {...common,selectors,humanCaptcha:false,preActions:[],beforeCaptchaActions:[],afterCaptchaActions:[],downloadButtons:['text=Emitir Certidão','text=Emitir CND','text=Consultar','text=Imprimir','text=Baixar','text=PDF']};
+}
+
 function portalsForCompany(company) {
   return [...basePortals.filter(portal => !portal.key.startsWith('estadual-')), statePortal(company), municipalPortal(company)].filter(Boolean);
 }
@@ -53,4 +61,11 @@ function portalForCertificate(company, certificateKey) {
   return portalsForCompany(company).find(portal => (portal.key.startsWith('estadual-') ? 'ceara' : portal.key) === certificateKey) || null;
 }
 
-module.exports = { portalsForCompany, portalForCertificate, statePortal, municipalPortal };
+async function resolvePortalsForCompany(company,{municipalResolver}={}){
+  const known=municipalPortal(company);let municipalResolved=null,resolution={status:'PORTAL_EM_DESCOBERTA'};
+  if(municipalResolver){resolution=await municipalResolver.resolve(company);municipalResolved=discoveredMunicipalPortal(company,resolution);}
+  if(!municipalResolved&&known){municipalResolved=known;resolution={...resolution,status:'PORTAL_ENCONTRADO',provider:'registry',certidao_url:known.url,fonte:'cadastro legado',confianca:'cadastro_legado'};}
+  return {portals:[...basePortals.filter(portal=>!portal.key.startsWith('estadual-')),statePortal(company),municipalResolved].filter(Boolean),municipalResolution:resolution};
+}
+
+module.exports = { portalsForCompany, portalForCertificate, resolvePortalsForCompany, discoveredMunicipalPortal, statePortal, municipalPortal };

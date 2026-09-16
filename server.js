@@ -6,7 +6,9 @@ const pdfParse = require('pdf-parse');
 const { BrowserManager } = require('./automation/browser');
 const { runPortal } = require('./automation/portalRunner');
 const portals = require('./config/portals');
-const { portalsForCompany, portalForCertificate } = require('./config/portalResolver');
+const { portalsForCompany, resolvePortalsForCompany } = require('./config/portalResolver');
+const { MunicipalPortalResolver, normalize: normalizeMunicipality } = require('./lib/municipal-portal-resolver');
+const municipalities = require('./config/municipalities.json').municipalities;
 
 const app = express();
 const PORT = process.env.PORT || 3030;
@@ -22,6 +24,13 @@ const STORAGE_ROOT = process.env.CENTRAL_CERTIDOES_STORAGE || path.join(
 );
 const STORAGE_CERTS = path.join(STORAGE_ROOT, 'certidoes');
 const STORAGE_INDEX = path.join(STORAGE_ROOT, 'archive');
+const municipalPortalResolver = new MunicipalPortalResolver({
+  cacheFile: path.join(STORAGE_ROOT, 'municipal-portals.json')
+});
+const municipalityCodeByName = new Map(municipalities.map(item => [
+  `${normalizeMunicipality(item.name)}:${String(item.uf).toUpperCase()}`,
+  String(item.code)
+]));
 
 fs.mkdirSync(path.join(DATA, 'certidoes'), { recursive: true });
 fs.mkdirSync(path.join(DATA, 'logs'), { recursive: true });
@@ -176,6 +185,12 @@ async function lookupCompany(cnpj) {
   for (const provider of providers) {
     try {
       const data = await provider();
+      if (!/^\d{7}$/.test(String(data.municipio_codigo_ibge || ''))) {
+        data.municipio_codigo_ibge = municipalityCodeByName.get(
+          `${normalizeMunicipality(data.municipio)}:${String(data.uf || '').toUpperCase()}`
+        ) || '';
+      }
+      data.codigo_ibge = data.municipio_codigo_ibge;
       cnpjCache.set(cnpj, { time: Date.now(), data });
       return data;
     } catch (_) {}
@@ -360,18 +375,24 @@ app.post('/api/session', async (req, res) => {
     events: []
   });
   activeSessionId = id;
-  let sessionPortals = portalsForCompany(company);
+  const portalResolution = await resolvePortalsForCompany(company, { municipalResolver: municipalPortalResolver });
+  let sessionPortals = portalResolution.portals;
   const certificateKey = String(req.body.certificateKey || '');
   if (certificateKey) {
-    const selectedPortal = portalForCertificate(company, certificateKey);
+    const selectedPortal = sessionPortals.find(portal => (portal.key.startsWith('estadual-') ? 'ceara' : portal.key) === certificateKey);
     if (!selectedPortal) {
       activeSessionId = null; sessions.delete(id);
-      return res.status(400).json({ error:'O portal desta certidão não foi identificado para a empresa consultada.' });
+      return res.status(400).json({
+        error:'O portal desta certidão não foi identificado para a empresa consultada.',
+        status: certificateKey === 'municipal' ? portalResolution.municipalResolution.status : 'PORTAL_NAO_CADASTRADO',
+        municipalResolution: portalResolution.municipalResolution
+      });
     }
     sessionPortals = [selectedPortal];
   }
   sessions.get(id).portals = sessionPortals;
-  res.json({ sessionId: id, company, portals: sessionPortals.map(p => ({ key: p.key, name: p.name })) });
+  sessions.get(id).municipalResolution = portalResolution.municipalResolution;
+  res.json({ sessionId: id, company, municipalResolution: portalResolution.municipalResolution, portals: sessionPortals.map(p => ({ key: p.key, name: p.name })) });
   runSession(id).catch(err => emit(id, { type: 'error', message: err.message }));
 });
 
@@ -417,6 +438,15 @@ async function runSession(id) {
     uf,
     municipio: s.company?.municipio || '',
     message: uf ? `UF cadastral identificada: ${uf}` : 'Não foi possível identificar a UF cadastral automaticamente.'
+  });
+  emit(id, {
+    type: 'municipal_resolution',
+    status: s.municipalResolution?.status || 'PORTAL_NAO_CADASTRADO',
+    portal: s.municipalResolution?.certidao_url || '',
+    provider: s.municipalResolution?.provider || '',
+    message: s.municipalResolution?.status === 'PORTAL_ENCONTRADO'
+      ? `Portal municipal identificado para ${s.company?.municipio || 'o município cadastrado'}.`
+      : `Portal municipal: ${s.municipalResolution?.status || 'PORTAL_NAO_CADASTRADO'}.`
   });
   for (const configuredPortal of (s.portals || portalsForCompany(s.company))) {
     const portal = configuredPortal.key === 'federal' ? {...configuredPortal, captchaTimeout: 120000} : configuredPortal;
