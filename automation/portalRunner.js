@@ -345,7 +345,7 @@ async function findSafeContinuation(context) {
 async function findMunicipalCertificateService(context, seen=new Set()) {
   const candidates=[];
   for (const page of [...context.pages()].reverse()) for (const frame of page.frames()) {
-    const nodes=frame.locator('a,button,[role="button"],[onclick],.card,.service,.servico,.tile');
+    const nodes=frame.locator('a,button,[role="button"],[onclick],.card,.service,.servico,.tile,[class*="card" i],[class*="service" i]');
     const count=Math.min(await nodes.count().catch(()=>0),160);
     for(let i=0;i<count;i++) {
       const el=nodes.nth(i); if(!await el.isVisible().catch(()=>false)||!await el.isEnabled().catch(()=>true)) continue;
@@ -356,7 +356,7 @@ async function findMunicipalCertificateService(context, seen=new Set()) {
       if(score>=7)candidates.push({element:el,page,frame,info,score});
     }
   }
-  candidates.sort((a,b)=>b.score-a.score); return candidates[0]||null;
+  candidates.sort((a,b)=>b.score-a.score || a.info.text.length-b.info.text.length); return candidates[0]||null;
 }
 
 async function saveUnknownState({page,portal,baseDir,previousAction,emit,history}) {
