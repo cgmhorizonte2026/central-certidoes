@@ -396,6 +396,9 @@ async function continueIssuanceFlow({page,context,browser,portal,baseDir,emit,ma
   const history=[];const seenServices=new Set();let previousAction='emissão inicial';
   for(let step=1;step<=maxSteps;step++) {
     await page.waitForTimeout(800).catch(()=>{});
+    // Aguarda respostas assíncronas do portal antes de classificar a etapa.
+    const loading=await page.locator('text=/Aguarde|Carregando|Processando/i').count().catch(()=>0);
+    if(loading){ await page.waitForTimeout(4000).catch(()=>{}); }
     const pdfBuffer=await recoverPdfFromPrintPages(context,8000);if(pdfBuffer)return {pdfBuffer,history,status:'DOCUMENTO_GERADO'};
     for(const candidate of [...context.pages()].reverse()){const directPdf=await extractPdfResponse(candidate,5000);if(directPdf)return {pdfBuffer:directPdf,history,status:'DOCUMENTO_GERADO'};}
     const livePages=[...context.pages()].filter(p=>!p.isClosed());
@@ -783,6 +786,7 @@ async function runPortal({ portal, cnpj, browser, baseDir, emit }) {
       const inputs=frame.locator('input'); const n=await inputs.count().catch(()=>0);
       for(let i=n-1;i>=0;i--){const input=inputs.nth(i);const value=String(await input.inputValue().catch(()=>''));if(onlyDigits(value)===onlyDigits(cnpj)){await input.press('Enter').catch(()=>{});emit({type:'form_submit_attempt',portal:portal.key,method:'enter',message:'Formulário municipal sem botão explícito; consulta acionada pelo campo preenchido.'});break;}}
     }
+    await page.waitForTimeout(3500).catch(()=>{});
   }
 
   // Alguns portais só apresentam o CAPTCHA depois que o usuário inicia a emissão.
