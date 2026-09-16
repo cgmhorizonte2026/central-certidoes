@@ -692,6 +692,9 @@ async function runPortal({ portal, cnpj, browser, baseDir, emit }) {
   await page.goto(portal.url, { waitUntil: 'domcontentloaded', timeout: 60000 });
   await page.bringToFront().catch(() => {});
   await page.waitForTimeout(portal.key === 'municipal' ? 6000 : 1800);
+  if (portal.key === 'municipal') {
+    await page.getByText(/certid[aã]o\s+negativa.*tributos|certid[aã]o.*d[eé]bitos/i).first().waitFor({state:'visible',timeout:20000}).catch(() => {});
+  }
 
   for (const action of (portal.preActions || [])) {
     const clicked = await clickFirstVisible(page, action.selectors || []);
