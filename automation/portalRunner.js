@@ -393,11 +393,19 @@ async function continueIssuanceFlow({page,context,browser,portal,baseDir,emit,ma
     let captchaPage=null;for(const candidate of livePages){const captcha=await browser.captchaState(candidate);if(captcha.captcha_active&&captcha.blocking){captchaPage=candidate;break;}}
     if(captchaPage){emit({type:'human_action_required',status:'AGUARDANDO_INTERACAO_USUARIO',portal:portal.key,message:'O órgão exige uma verificação humana. Resolva o CAPTCHA na mesma janela; a Central continuará desta etapa.'});await browser.waitForCaptcha(captchaPage,'Conclua a verificação humana na janela do órgão. A sessão, os cookies e os dados preenchidos serão mantidos.',600000,true);page=captchaPage;history.push({step,type:'captcha_resolvido',url:page.url()});continue;}
     if (portal.key === 'municipal') {
+      const formVisible=await (async()=>{for(const frame of context.pages().flatMap(p=>p.frames()))for(const selector of (portal.selectors?.cnpj||[])){const loc=frame.locator(selector);const n=await loc.count().catch(()=>0);for(let i=0;i<n;i++)if(await loc.nth(i).isVisible().catch(()=>false))return true;}return false;})();
+      if(formVisible) { /* já estamos no formulário; não reabrir o catálogo pelo breadcrumb */ }
+      else {
       const service=await findMunicipalCertificateService(context,seenServices);
       if (service) { const action=service.info.text; seenServices.add(normalText(action)+'|'+service.info.href); emit({type:'service_catalog_detected',status:'CATALOGO_SERVICOS',portal:portal.key,action,url:service.page.url(),message:`Serviço de certidão identificado: ${action}`}); await service.element.click({timeout:7000}); history.push({step,action,url:service.page.url(),at:new Date().toISOString(),type:'service_navigation'}); previousAction=action; page=service.page; continue; }
+      }
     }
     const next=await findSafeContinuation(context);
-    if(!next){await saveUnknownState({page:livePages.at(-1)||page,portal,baseDir,previousAction,emit,history});return {history,status:'ESTADO_DESCONHECIDO'};}
+    if(!next){
+      const formReady=portal.key==='municipal'&&await (async()=>{for(const frame of livePages.flatMap(p=>p.frames()))for(const selector of (portal.selectors?.cnpj||[])){const loc=frame.locator(selector),n=await loc.count().catch(()=>0);for(let i=0;i<n;i++)if(await loc.nth(i).isVisible().catch(()=>false))return true;}return false;})();
+      if(formReady)return {history,status:'FORMULARIO_CERTIDAO_ENCONTRADO'};
+      await saveUnknownState({page:livePages.at(-1)||page,portal,baseDir,previousAction,emit,history});return {history,status:'ESTADO_DESCONHECIDO'};
+    }
     if(next.pdfAction){return {history,status:'PDF_ACTION_AVAILABLE'};}
     const beforeUrl=next.page.url(),action=next.info.text;emit({type:'continuation_action',portal:portal.key,step,action,url:beforeUrl,message:`Etapa ${step}: ${action}`});
     await next.element.click({timeout:7000});history.push({step,action,url:beforeUrl,at:new Date().toISOString()});previousAction=action;page=next.page;
