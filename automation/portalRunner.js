@@ -342,6 +342,23 @@ async function findSafeContinuation(context) {
   return choices[0];
 }
 
+async function findMunicipalCertificateService(context, seen=new Set()) {
+  const candidates=[];
+  for (const page of [...context.pages()].reverse()) for (const frame of page.frames()) {
+    const nodes=frame.locator('a,button,[role="button"],[onclick],.card,.service,.servico,.tile');
+    const count=Math.min(await nodes.count().catch(()=>0),160);
+    for(let i=0;i<count;i++) {
+      const el=nodes.nth(i); if(!await el.isVisible().catch(()=>false)||!await el.isEnabled().catch(()=>true)) continue;
+      const info=await el.evaluate(e=>({text:(e.innerText||e.getAttribute('aria-label')||e.title||'').replace(/\s+/g,' ').trim(),href:e.href||'',tag:e.tagName,id:e.id||'',className:String(e.className||'')})).catch(()=>null); if(!info||!info.text) continue;
+      const t=normalText(info.text); if(seen.has(t+'|'+info.href)) continue;
+      if(!/certidao|cnd|debito|tribut/.test(t)||/\b(iptu|itbi|alvara|acordo|tllf)\b/.test(t)&&!/certidao|cnd/.test(t)) continue;
+      const score=(/certidao|cnd/.test(t)?6:0)+(/negativ|tribut|debito|contribuinte|fiscal/.test(t)?3:0);
+      if(score>=7)candidates.push({element:el,page,frame,info,score});
+    }
+  }
+  candidates.sort((a,b)=>b.score-a.score); return candidates[0]||null;
+}
+
 async function saveUnknownState({page,portal,baseDir,previousAction,emit,history}) {
   const dir=path.join(baseDir,'data','diagnostics',`${portal.key}-${Date.now()}`);fs.mkdirSync(dir,{recursive:true});
   const screenshot=path.join(dir,'screen.png'),htmlFile=path.join(dir,'page.html'),jsonFile=path.join(dir,'state.json');
@@ -354,7 +371,7 @@ async function saveUnknownState({page,portal,baseDir,previousAction,emit,history
 }
 
 async function continueIssuanceFlow({page,context,browser,portal,baseDir,emit,maxSteps=8}) {
-  const history=[];let previousAction='emissão inicial';
+  const history=[];const seenServices=new Set();let previousAction='emissão inicial';
   for(let step=1;step<=maxSteps;step++) {
     await page.waitForTimeout(800).catch(()=>{});
     const pdfBuffer=await recoverPdfFromPrintPages(context,8000);if(pdfBuffer)return {pdfBuffer,history,status:'DOCUMENTO_GERADO'};
@@ -362,6 +379,10 @@ async function continueIssuanceFlow({page,context,browser,portal,baseDir,emit,ma
     const livePages=[...context.pages()].filter(p=>!p.isClosed());
     let captchaPage=null;for(const candidate of livePages){const captcha=await browser.captchaState(candidate);if(captcha.captcha_active&&captcha.blocking){captchaPage=candidate;break;}}
     if(captchaPage){emit({type:'human_action_required',status:'AGUARDANDO_INTERACAO_USUARIO',portal:portal.key,message:'O órgão exige uma verificação humana. Resolva o CAPTCHA na mesma janela; a Central continuará desta etapa.'});await browser.waitForCaptcha(captchaPage,'Conclua a verificação humana na janela do órgão. A sessão, os cookies e os dados preenchidos serão mantidos.',600000,true);page=captchaPage;history.push({step,type:'captcha_resolvido',url:page.url()});continue;}
+    if (portal.key === 'municipal') {
+      const service=await findMunicipalCertificateService(context,seenServices);
+      if (service) { const action=service.info.text; seenServices.add(normalText(action)+'|'+service.info.href); emit({type:'service_catalog_detected',status:'CATALOGO_SERVICOS',portal:portal.key,action,url:service.page.url(),message:`Serviço de certidão identificado: ${action}`}); await service.element.click({timeout:7000}); history.push({step,action,url:service.page.url(),at:new Date().toISOString(),type:'service_navigation'}); previousAction=action; page=service.page; continue; }
+    }
     const next=await findSafeContinuation(context);
     if(!next){await saveUnknownState({page:livePages.at(-1)||page,portal,baseDir,previousAction,emit,history});return {history,status:'ESTADO_DESCONHECIDO'};}
     if(next.pdfAction){return {history,status:'PDF_ACTION_AVAILABLE'};}
@@ -878,4 +899,4 @@ async function runPortal({ portal, cnpj, browser, baseDir, emit }) {
   return { filePath };
 }
 
-module.exports = { runPortal, findSafeContinuation, continueIssuanceFlow };
+module.exports = { runPortal, findSafeContinuation, findMunicipalCertificateService, continueIssuanceFlow };
