@@ -402,6 +402,13 @@ async function continueIssuanceFlow({page,context,browser,portal,baseDir,emit,ma
     }
     const next=await findSafeContinuation(context);
     if(!next){
+      const documentAction=await (async()=>{
+        for(const candidate of livePages){
+          const selectors=['a[href*="impressao_documentos" i]','a:has-text("Imprimir")','button:has-text("Imprimir")','a:has-text("Visualizar")','button:has-text("Visualizar")'];
+          for(const selector of selectors){const loc=candidate.locator(selector),n=await loc.count().catch(()=>0);for(let i=0;i<n;i++)if(await loc.nth(i).isVisible().catch(()=>false))return {page:candidate,selector};}
+        } return null;
+      })();
+      if(documentAction){return {history,status:'DOCUMENTO_ACTION_AVAILABLE',documentAction};}
       const formReady=portal.key==='municipal'&&await (async()=>{for(const frame of livePages.flatMap(p=>p.frames()))for(const selector of (portal.selectors?.cnpj||[])){const loc=frame.locator(selector),n=await loc.count().catch(()=>0);for(let i=0;i<n;i++)if(await loc.nth(i).isVisible().catch(()=>false))return true;}return false;})();
       if(formReady)return {history,status:'FORMULARIO_CERTIDAO_ENCONTRADO'};
       await saveUnknownState({page:livePages.at(-1)||page,portal,baseDir,previousAction,emit,history});return {history,status:'ESTADO_DESCONHECIDO'};
@@ -761,6 +768,7 @@ async function runPortal({ portal, cnpj, browser, baseDir, emit }) {
     }
     throw new Error('CNPJ não confirmado no formulário de '+portal.name+'.');
   }
+  if (filled) emit({ type:'form_detected', status:'FORMULARIO_CERTIDAO_ENCONTRADO', portal:portal.key, url:page.url(), message:'Formulário da certidão localizado e CNPJ preenchido.' });
   if (portal.key === 'municipal' && !(portal.afterCaptchaActions || []).length) {
     for (const frame of page.frames()) {
       const inputs=frame.locator('input'); const n=await inputs.count().catch(()=>0);
