@@ -358,7 +358,7 @@ async function continueIssuanceFlow({page,context,browser,portal,baseDir,emit,ma
     await page.waitForTimeout(800).catch(()=>{});
     const pdfBuffer=await recoverPdfFromPrintPages(context,8000);if(pdfBuffer)return {pdfBuffer,history,status:'DOCUMENTO_GERADO'};
     const livePages=[...context.pages()].filter(p=>!p.isClosed());
-    let captchaPage=null;for(const candidate of livePages){if(await browser.captchaPresent(candidate)){captchaPage=candidate;break;}}
+    let captchaPage=null;for(const candidate of livePages){const captcha=await browser.captchaState(candidate);if(captcha.captcha_active&&captcha.blocking){captchaPage=candidate;break;}}
     if(captchaPage){emit({type:'human_action_required',status:'AGUARDANDO_INTERACAO_USUARIO',portal:portal.key,message:'O órgão exige uma verificação humana. Resolva o CAPTCHA na mesma janela; a Central continuará desta etapa.'});await browser.waitForCaptcha(captchaPage,'Conclua a verificação humana na janela do órgão. A sessão, os cookies e os dados preenchidos serão mantidos.',600000,true);page=captchaPage;history.push({step,type:'captcha_resolvido',url:page.url()});continue;}
     const next=await findSafeContinuation(context);
     if(!next){await saveUnknownState({page:livePages.at(-1)||page,portal,baseDir,previousAction,emit,history});return {history,status:'ESTADO_DESCONHECIDO'};}
