@@ -332,7 +332,7 @@ async function findSafeContinuation(context) {
         const negative=/cancelar|sair|voltar|fechar|limpar|nova emissao|novo/.test(text);
         const issuance=/certidao|certificado|debitos?|emissao|geracao/.test(contextText);
         const modal=/confirm|deseja|prosseguir|continuar|emitir|gerar/.test(contextText)&&/certidao|documento/.test(contextText);
-        if(positive&&!negative&&issuance&&(pdfAction||modal||/dialog|modal/.test(normalText(`${info.role} ${info.id} ${info.name}`)))) choices.push({element,page:candidatePage,frame,info,score:(pdfAction?8:0)+(modal?5:0)+(text.includes('certidao')?3:0)+(text.startsWith('confirmar')?2:0)});
+        if(positive&&!negative&&issuance&&(pdfAction||modal||/dialog|modal/.test(normalText(`${info.role} ${info.id} ${info.name}`)))) choices.push({element,page:candidatePage,frame,info,pdfAction,score:(pdfAction?8:0)+(modal?5:0)+(text.includes('certidao')?3:0)+(text.startsWith('confirmar')?2:0)});
       }
     }
   }
@@ -364,6 +364,7 @@ async function continueIssuanceFlow({page,context,browser,portal,baseDir,emit,ma
     if(captchaPage){emit({type:'human_action_required',status:'AGUARDANDO_INTERACAO_USUARIO',portal:portal.key,message:'O órgão exige uma verificação humana. Resolva o CAPTCHA na mesma janela; a Central continuará desta etapa.'});await browser.waitForCaptcha(captchaPage,'Conclua a verificação humana na janela do órgão. A sessão, os cookies e os dados preenchidos serão mantidos.',600000,true);page=captchaPage;history.push({step,type:'captcha_resolvido',url:page.url()});continue;}
     const next=await findSafeContinuation(context);
     if(!next){await saveUnknownState({page:livePages.at(-1)||page,portal,baseDir,previousAction,emit,history});return {history,status:'ESTADO_DESCONHECIDO'};}
+    if(next.pdfAction){return {history,status:'PDF_ACTION_AVAILABLE'};}
     const beforeUrl=next.page.url(),action=next.info.text;emit({type:'continuation_action',portal:portal.key,step,action,url:beforeUrl,message:`Etapa ${step}: ${action}`});
     await next.element.click({timeout:7000});history.push({step,action,url:beforeUrl,at:new Date().toISOString()});previousAction=action;page=next.page;
   }
