@@ -702,6 +702,21 @@ async function runPortal({ portal, cnpj, browser, baseDir, emit }) {
     if (clicked) await page.waitForTimeout(action.waitMs || 1800);
   }
 
+  // Portais municipais como o GPI podem abrir primeiro um catálogo de
+  // serviços. Navega até o serviço de certidão antes de procurar o CNPJ.
+  if (portal.key === 'municipal') {
+    const catalogSeen = new Set();
+    for (let step = 1; step <= 5; step++) {
+      const service = await findMunicipalCertificateService(browser.context, catalogSeen);
+      if (!service) break;
+      const label = service.info.text;
+      catalogSeen.add(normalText(label) + '|' + service.info.href);
+      emit({ type:'service_catalog_detected', status:'CATALOGO_SERVICOS', portal:portal.key, step, action:label, url:service.page.url(), message:`Serviço municipal localizado: ${label}` });
+      await service.element.click({ timeout:7000 });
+      await service.page.waitForTimeout(1800).catch(() => {});
+    }
+  }
+
   let filled = await fillCnpj(page, portal.selectors, cnpj, portal.key);
   emit({ type: 'cnpj_fill', portal: portal.key, filled });
   if (!filled && ['fgts','trabalhista'].includes(portal.key)) {
@@ -712,7 +727,13 @@ async function runPortal({ portal, cnpj, browser, baseDir, emit }) {
       if(values.some(v=>onlyDigits(v)===onlyDigits(cnpj))) filled=true;
     }
   }
-  if (!filled) throw new Error('CNPJ não confirmado no formulário de '+portal.name+'.');
+  if (!filled) {
+    if (portal.key === 'municipal') {
+      await saveUnknownState({page,portal,baseDir,previousAction:'catálogo/serviço municipal',emit,history:[]});
+      throw new Error('ESTADO_DESCONHECIDO: portal municipal aberto, mas o formulário da certidão não foi localizado.');
+    }
+    throw new Error('CNPJ não confirmado no formulário de '+portal.name+'.');
+  }
 
   // Alguns portais só apresentam o CAPTCHA depois que o usuário inicia a emissão.
   // A Receita Federal, em particular, precisa receber o comando de "Nova Certidão"
