@@ -360,6 +360,14 @@ async function findMunicipalCertificateService(context, seen=new Set()) {
   candidates.sort((a,b)=>b.score-a.score || a.info.text.length-b.info.text.length); return candidates[0]||null;
 }
 
+async function selectCnpjOption(page) {
+  for (const frame of page.frames()) {
+    const radios=frame.locator('input[type="radio"]'); const count=await radios.count().catch(()=>0);
+    for(let i=0;i<count;i++){const radio=radios.nth(i);if(!await radio.isVisible().catch(()=>false))continue;const context=normalText(await radio.evaluate(e=>(e.closest('label,fieldset,div')||e.parentElement)?.innerText||'').catch(()=>''));if(/cnpj|pessoa juridica/.test(context)&&!(/cpf/.test(context)&&!/cnpj/.test(context))){await radio.check({force:true}).catch(()=>radio.click({force:true}));return true;}}
+  }
+  return false;
+}
+
 async function saveUnknownState({page,portal,baseDir,previousAction,emit,history}) {
   const dir=path.join(baseDir,'data','diagnostics',`${portal.key}-${Date.now()}`);fs.mkdirSync(dir,{recursive:true});
   const screenshot=path.join(dir,'screen.png'),htmlFile=path.join(dir,'page.html'),jsonFile=path.join(dir,'state.json');
@@ -720,6 +728,8 @@ async function runPortal({ portal, cnpj, browser, baseDir, emit }) {
       await service.page.waitForTimeout(1800).catch(() => {});
     }
   }
+
+  if (portal.key === 'municipal') await selectCnpjOption(page);
 
   let filled = await fillCnpj(page, portal.selectors, cnpj, portal.key);
   emit({ type: 'cnpj_fill', portal: portal.key, filled });

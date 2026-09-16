@@ -3,7 +3,7 @@ const { states, municipal } = require('./registry');
 
 const normalize = value => String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
 const municipalityCodes = new Map(Object.entries(municipal).map(([code, portal]) => [normalize(portal.name.replace(/^Municipal\s*·\s*/, '')), code]));
-const selectors = { cnpj: ['input[name*="cnpj" i]','input[id*="cnpj" i]','input[placeholder*="CNPJ" i]','input[name*="cpfcnpj" i]','input[id*="cpfcnpj" i]','input[maxlength="14"]','input[maxlength="18"]'] };
+const selectors = { cnpj: ['input[name*="cnpj" i]','input[id*="cnpj" i]','input[placeholder*="CNPJ" i]','input[name*="cpfcnpj" i]','input[id*="cpfcnpj" i]','input[maxlength="14"]','input[maxlength="18"]','input.gwt-TextBox[value*="__"]'] };
 
 function statePortal(company) {
   const uf = String(company?.uf || '').toUpperCase(), entry = states[uf];
