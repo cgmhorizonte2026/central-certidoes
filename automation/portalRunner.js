@@ -171,6 +171,25 @@ async function clickFirstVisible(page, selectors) {
   return false;
 }
 
+// Submission barrier: never send a form action while a visible, blocking
+// human verification is present. The check is intentionally generic and is
+// performed immediately before every submit-like action.
+async function ensureCaptchaClearBeforeSubmit({ page, browser, emit, portal, stage }) {
+  let current = page;
+  const state = await browser.captchaState(current).catch(() => ({ captcha_active:false, blocking:false }));
+  emit({ type: 'captcha_before_submit', portal: portal.key, stage, detected: state.detected !== undefined ? !!state.detected : !!state.captcha_active,
+    active: !!state.captcha_active, blocking: !!state.blocking, provider: state.provider || null,
+    evidence: state.evidence || [], submitAttempted: false, submitBlockedByCaptcha: !!(state.captcha_active && state.blocking) });
+  if (!(state.captcha_active && state.blocking)) return { page: current, allowed: true };
+  emit({ type: 'submit_blocked_by_captcha', portal: portal.key, stage, submitAttempted: false,
+    submitBlockedByCaptcha: true, captcha: state });
+  await browser.waitForCaptcha(current, 'Conclua a verificação humana na janela do órgão. A Central continuará automaticamente.', 600000, true);
+  emit({ type: 'captcha_after_user_interaction', portal: portal.key, stage });
+  const after = await browser.captchaState(current).catch(() => ({ captcha_active:false, blocking:false }));
+  if (after.captcha_active && after.blocking) return { page: current, allowed: false, captcha: after };
+  return { page: current, allowed: true, captcha: after };
+}
+
 async function capturePdfFromClick(page, context, selectors, timeout = 30000) {
   for (const scope of page.frames()) {
   for (const selector of selectors || []) {
@@ -427,6 +446,8 @@ async function continueIssuanceFlow({page,context,browser,portal,baseDir,emit,ma
     }
     if(next.pdfAction){return {history,status:'PDF_ACTION_AVAILABLE'};}
     const beforeUrl=next.page.url(),action=next.info.text;emit({type:'continuation_action',portal:portal.key,step,action,url:beforeUrl,message:`Etapa ${step}: ${action}`});
+    const gate = await ensureCaptchaClearBeforeSubmit({page: next.page, browser, emit, portal, stage: action});
+    if (!gate.allowed) { history.push({step,action,type:'captcha_blocked'}); continue; }
     await next.element.click({timeout:7000});history.push({step,action,url:beforeUrl,at:new Date().toISOString()});previousAction=action;page=next.page;
   }
   emit({type:'continuation_limit',status:'ESTADO_DESCONHECIDO',portal:portal.key,history,message:`Limite de ${maxSteps} etapas atingido para evitar repetição.`});
@@ -763,6 +784,8 @@ async function runPortal({ portal, cnpj, browser, baseDir, emit }) {
 
   if (portal.key === 'municipal') await selectCnpjOption(page);
 
+  const captchaBeforeFill = await browser.captchaState(page).catch(() => ({captcha_active:false,blocking:false}));
+  emit({type:'captcha_before_fill', portal:portal.key, detected:captchaBeforeFill.detected !== undefined ? !!captchaBeforeFill.detected : !!captchaBeforeFill.captcha_active, active:!!captchaBeforeFill.captcha_active, blocking:!!captchaBeforeFill.blocking, evidence:captchaBeforeFill.evidence||[]});
   let filled = await fillCnpj(page, portal.selectors, cnpj, portal.key);
   emit({ type: 'cnpj_fill', portal: portal.key, filled });
   if (!filled && ['fgts','trabalhista'].includes(portal.key)) {
@@ -781,7 +804,11 @@ async function runPortal({ portal, cnpj, browser, baseDir, emit }) {
     throw new Error('CNPJ não confirmado no formulário de '+portal.name+'.');
   }
   if (filled) emit({ type:'form_detected', status:'FORMULARIO_CERTIDAO_ENCONTRADO', portal:portal.key, url:page.url(), message:'Formulário da certidão localizado e CNPJ preenchido.' });
+  const captchaAfterFill = await browser.captchaState(page).catch(() => ({captcha_active:false,blocking:false}));
+  emit({type:'captcha_after_fill', portal:portal.key, detected:captchaAfterFill.detected !== undefined ? !!captchaAfterFill.detected : !!captchaAfterFill.captcha_active, active:!!captchaAfterFill.captcha_active, blocking:!!captchaAfterFill.blocking, evidence:captchaAfterFill.evidence||[]});
   if (portal.key === 'municipal' && !(portal.afterCaptchaActions || []).length) {
+    const gate = await ensureCaptchaClearBeforeSubmit({page, browser, emit, portal, stage:'municipal_form_enter'});
+    if (!gate.allowed) throw new Error('AGUARDANDO_INTERACAO_USUARIO: CAPTCHA ainda bloqueia o envio.');
     for (const frame of page.frames()) {
       const inputs=frame.locator('input'); const n=await inputs.count().catch(()=>0);
       for(let i=n-1;i>=0;i--){const input=inputs.nth(i);const value=String(await input.inputValue().catch(()=>''));if(onlyDigits(value)===onlyDigits(cnpj)){await input.press('Enter').catch(()=>{});emit({type:'form_submit_attempt',portal:portal.key,method:'enter',message:'Formulário municipal sem botão explícito; consulta acionada pelo campo preenchido.'});break;}}
@@ -870,7 +897,8 @@ async function runPortal({ portal, cnpj, browser, baseDir, emit }) {
         }
       }
     } else {
-      clicked = await clickFirstVisible(page, action.selectors || []);
+      const gate = await ensureCaptchaClearBeforeSubmit({page, browser, emit, portal, stage: action.name || 'after_captcha_action'});
+      if (gate.allowed) clicked = await clickFirstVisible(page, action.selectors || []);
     }
     emit({ type: 'after_captcha_action', portal: portal.key, action: action.name || 'ação pós-CAPTCHA', clicked });
     if (clicked) await page.waitForTimeout(action.waitMs || 2200);
