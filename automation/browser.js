@@ -137,7 +137,7 @@ class BrowserManager {
     } catch (_) { return false; }
   }
 
-  async waitForCaptcha(page, message, timeoutMs = 600000, force = false, waitForCentralResume = false) {
+  async waitForCaptcha(page, message, timeoutMs = 600000, force = false, waitForCentralResume = true) {
     let seenCaptcha = (await this.captchaState(page)).captcha_active;
     if (!seenCaptcha && !force) {
       this.emit({ type: 'no_captcha_detected' });
