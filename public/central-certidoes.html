@@ -589,6 +589,13 @@ async function buscarNomeEmpresa(digits){
       const nome = data.razao_social || data.nome_fantasia || '';
       if(cnpjDigits() !== digits) return;
       companyData = data;
+      // Keep the municipal card synchronized with the cadastral lookup. The
+      // municipality is supplied by the CNPJ source, so users do not need to
+      // retype it before starting the municipal certificate flow.
+      const municipalField = document.getElementById('municipio-municipal');
+      if (municipalField && data.municipio) {
+        municipalField.value = [data.municipio, data.uf].filter(Boolean).join('/');
+      }
       if(nome && !razaoInput.value){
         razaoInput.value = nome;
       }
