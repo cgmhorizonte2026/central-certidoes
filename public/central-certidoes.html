@@ -446,9 +446,17 @@ header.top{border:0!important;padding:0 0 18px!important;margin-bottom:14px!impo
 
   <div id="secaoMonitoradas">
     <h2 class="section-title">3. Empresas monitoradas</h2>
-    <div class="section-sub">Registro local das últimas certidões conferidas nesta ferramenta. Cada CNPJ já consultado é salvo automaticamente; ao digitar um CNPJ que já está aqui, os últimos dados aparecem de imediato, ordenados pelo vencimento mais próximo. Isso não é uma nova consulta ao governo — é o retrato da última vez em que você conferiu cada certidão aqui.</div>
+    <div class="section-sub">Empresas que já possuem consultas ou documentos registrados na Central.</div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin:10px 0"><input id="filtroEmpresas" placeholder="Filtrar por CNPJ, razão social ou município" style="flex:1;min-width:260px;padding:10px;border:1px solid #C9C2AE;border-radius:5px"><select id="filtroStatusEmpresas" style="padding:10px;border:1px solid #C9C2AE;border-radius:5px"><option value="">Todas as empresas</option><option value="pendente">Com pendência</option><option value="valida">Com certidão válida</option></select></div>
     <div id="monitoradas"></div>
   </div>
+
+  <section id="secaoHistoricoLog" class="modern-section">
+    <h2 class="section-title">4. Histórico de movimentações</h2>
+    <div class="section-sub">Registro cronológico das consultas, etapas, interações, documentos e ocorrências do sistema.</div>
+    <div style="display:flex;gap:8px;margin:10px 0"><input id="filtroHistorico" placeholder="Filtrar eventos" style="flex:1;padding:10px;border:1px solid #C9C2AE;border-radius:5px"><button class="btn secondary" id="limparHistoricoLog">Limpar filtro</button></div>
+    <div id="historicoLog" class="mon-empty">Nenhuma movimentação registrada.</div>
+  </section>
 
   <footer class="note" id="rodapeNota">
     Ferramenta de apoio: os links abrem os sites oficiais de cada órgão, mas a emissão e o CAPTCHA são feitos manualmente por exigência deles. A leitura dos PDFs é automática por reconhecimento de texto; confira sempre o documento original antes de anexar a um processo. O registro de empresas monitoradas fica salvo neste navegador/conta e reflete a data da última conferência feita aqui, não uma consulta automática em tempo real aos órgãos.
@@ -808,6 +816,22 @@ function copyVerifyAndOpen(key){
 
 // ---- Base local de empresas consultadas (window.storage) ----
 
+const logEventos = new Map();
+async function registrarMovimentacao(evento, contexto={}){
+  const item={id:`${Date.now()}-${Math.random().toString(36).slice(2,7)}`,quando:new Date().toISOString(),tipo:evento.type||'evento',mensagem:evento.message||evento.type||'Movimentação',portal:evento.portal||contexto.portal||'',cnpj:contexto.cnpj||cnpjDigits(),dados:evento};
+  try{ await window.storage.set('log:'+item.id,JSON.stringify(item),false); }catch(_){ }
+  logEventos.set(item.id,item); renderHistoricoLog();
+}
+async function renderHistoricoLog(){
+  const box=document.getElementById('historicoLog'); if(!box)return;
+  try{const r=await window.storage.list('log:',false); for(const k of (r?.keys||[])){if(logEventos.has(k))continue;const v=await window.storage.get(k,false);if(v)logEventos.set(k,JSON.parse(v.value));}}catch(_){ }
+  const q=(document.getElementById('filtroHistorico')?.value||'').toLowerCase();
+  const rows=[...logEventos.values()].filter(x=>!q||JSON.stringify(x).toLowerCase().includes(q)).sort((a,b)=>b.quando.localeCompare(a.quando));
+  box.innerHTML=rows.length?rows.slice(0,300).map(x=>`<div class="mon-row"><div class="mon-id"><div class="mon-nome">${new Date(x.quando).toLocaleString('pt-BR')} · ${x.tipo}</div><div class="mon-cnpj">${x.portal||''} ${x.cnpj||''}</div></div><div class="mon-updated">${String(x.mensagem).replace(/[<>&]/g,'')}</div></div>`).join(''):'Nenhuma movimentação registrada.';
+}
+document.getElementById('filtroHistorico')?.addEventListener('input',renderHistoricoLog);
+document.getElementById('limparHistoricoLog')?.addEventListener('click',()=>{document.getElementById('filtroHistorico').value='';renderHistoricoLog();});
+
 async function salvarNoHistorico(){
   const digits = cnpjDigits();
   if(digits.length !== 14) return;
@@ -823,6 +847,7 @@ async function salvarNoHistorico(){
   });
   try{
     await window.storage.set('empresa:' + digits, JSON.stringify(registro), false);
+    await registrarMovimentacao({type:'empresa_atualizada',message:'Dados e certidões da empresa atualizados.'},{cnpj:digits});
   }catch(err){
     console.error('Não foi possível salvar no histórico local:', err);
   }
@@ -885,6 +910,11 @@ async function renderMonitoradas(){
   }
 
   const today = new Date().toISOString().slice(0,10);
+  const filtro=(document.getElementById('filtroEmpresas')?.value||'').toLowerCase();
+  const filtroStatus=document.getElementById('filtroStatusEmpresas')?.value||'';
+  const antes=registros.length;
+  const filtradas=registros.filter(reg=>{const hay=JSON.stringify(reg).toLowerCase();const vals=ORGAOS.map(o=>reg.orgaos[o.key]?.validade).filter(Boolean);const pend=ORGAOS.some(o=>!reg.orgaos[o.key]||!reg.orgaos[o.key].validade||reg.orgaos[o.key].validade<today||reg.orgaos[o.key].status==='positiva');return (!filtro||hay.includes(filtro))&&(!filtroStatus||(filtroStatus==='pendente'?pend:!pend&&vals.length));});
+  registros.length=0; registros.push(...filtradas);
   function proximoVencimento(reg){
     const validades = ORGAOS.map(o=>reg.orgaos[o.key]?.validade).filter(Boolean);
     if(validades.length===0) return '9999-99-99';
@@ -915,6 +945,8 @@ async function renderMonitoradas(){
       </div>`;
   }).join('');
 }
+document.getElementById('filtroEmpresas')?.addEventListener('input',renderMonitoradas);
+document.getElementById('filtroStatusEmpresas')?.addEventListener('change',renderMonitoradas);
 
 function abrirDoHistorico(digits){
   document.getElementById('cnpj').value = maskCnpj(digits);
@@ -1118,6 +1150,7 @@ window.addEventListener('DOMContentLoaded',()=>{
   let sessionId = null, poll = null;
   const steps = {};
   const processedPdfUrls = new Set();
+  const processedEventKeys = new Set();
   function digits(v){return String(v||'').replace(/\D/g,'')}
   function log(msg){ const el=$('v2Log'); el.textContent += `[${new Date().toLocaleTimeString()}] ${msg}\n`; el.scrollTop=el.scrollHeight; }
   function renderSteps(names){ $('v2Steps').innerHTML=''; names.forEach(p=>{ const d=document.createElement('div'); d.className='v2-step'; d.id='v2-'+p.key; d.innerHTML=`<b>${p.name}</b><small>Aguardando</small>`; $('v2Steps').appendChild(d); steps[p.key]=d; }); }
@@ -1180,6 +1213,8 @@ window.addEventListener('DOMContentLoaded',()=>{
       $('btnContinuar').disabled=!human;
       if(human) $('v2HumanMsg').textContent=human.message;
       s.events.forEach(e=>{
+        const eventKey=(e.time||'')+'|'+(e.type||'')+'|'+(e.portal||'')+'|'+(e.message||'');
+        if(!processedEventKeys.has(eventKey)){processedEventKeys.add(eventKey);registrarMovimentacao(e,{cnpj:cnpjDigits()});}
         if(e.portal){
           if(e.type==='portal_start')step(e.portal,'Consultando');
           if(e.type==='human_action_required')step(e.portal,'CAPTCHA / ação humana');
