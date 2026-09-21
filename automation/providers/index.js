@@ -14,13 +14,19 @@ function speedGovAdapter(common, selectors) {
     ...common,
     adapter: 'SpeedGovAdapter',
     selectors: { cnpj: ['#dados_documento', 'input[name="dados[documento]"]', ...selectors.cnpj] },
-    humanCaptcha: false,
+    humanCaptcha: 'required',
     preActions: [
       { name: 'Emitir CND', selectors: ['a:has-text("Emitir CND")', 'button:has-text("Emitir CND")'], required: true, waitMs: 1200 },
       { name: 'Selecionar Contribuinte', selectors: ['a:has-text("Contribuinte")', 'button:has-text("Contribuinte")'], required: true, waitMs: 1200 }
     ],
     beforeCaptchaActions: [],
-    afterCaptchaActions: [],
+    afterCaptchaActions: [{
+      name: 'Consultar certidão',
+      selectors: ['#gerar_certidao', 'input[type="submit"][name="commit"][value*="Consultar" i]', 'button:has-text("Consultar")'],
+      captureDownload: true,
+      downloadTimeout: 30000,
+      waitMs: 2200
+    }],
     downloadButtons: ['a[href*="impressao" i]', 'a:has-text("Imprimir")', 'text=Imprimir', 'text=Emitir Certidão', 'text=Emitir CND', 'text=Baixar', 'text=PDF']
   };
 }
