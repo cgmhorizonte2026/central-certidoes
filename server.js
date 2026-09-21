@@ -61,7 +61,7 @@ function emit(sessionId, event) {
 function onlyDigits(v) { return String(v || '').replace(/\D/g, ''); }
 
 function toIsoDate(br) {
-  const m = String(br || '').match(/^(\d{2})[\/-](\d{2})[\/-](\d{4})$/);
+  const m = String(br || '').replace(/\s+/g, '').match(/^(\d{2})[\/.\-](\d{2})[\/.\-](\d{4})$/);
   return m ? `${m[3]}-${m[2]}-${m[1]}` : '';
 }
 
@@ -82,12 +82,12 @@ function parseCert(text) {
     status = 'negativa';
   }
 
-  const allDates = [...upper.matchAll(/\b(\d{2}[\/-]\d{2}[\/-]\d{4})\b/g)].map(m => m[1]);
+  const allDates = [...upper.matchAll(/\b(\d{2}\s*[\/.\-]\s*\d{2}\s*[\/.\-]\s*\d{4})\b/g)].map(m => m[1]);
   let validade = '';
   const validityPatterns = [
-    /V[ÁA]LID[AO]?\s+(?:AT[ÉE]|ATÉ|ATE|DE)?\s*[:\-]?\s*(\d{2}[\/-]\d{2}[\/-]\d{4})/,
-    /VALIDADE\s*[:\-]?\s*(\d{2}[\/-]\d{2}[\/-]\d{4})/,
-    /V[ÁA]LIDA\s+AT[ÉE]\s+(\d{2}[\/-]\d{2}[\/-]\d{4})/
+    /V[ÁA]LID[AO]?\s+(?:AT[ÉE]|ATÉ|ATE|DE)?\s*[:\-]?\s*(\d{2}\s*[\/.\-]\s*\d{2}\s*[\/.\-]\s*\d{4})/,
+    /VALIDADE\s*[:\-]?\s*(\d{2}\s*[\/.\-]\s*\d{2}\s*[\/.\-]\s*\d{4})/,
+    /V[ÁA]LIDA\s+AT[ÉE]\s+(\d{2}\s*[\/.\-]\s*\d{2}\s*[\/.\-]\s*\d{4})/
   ];
   for (const re of validityPatterns) {
     const m = upper.match(re);
