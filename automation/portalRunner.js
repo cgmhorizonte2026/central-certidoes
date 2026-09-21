@@ -278,6 +278,15 @@ async function capturePdfFromClick(page, context, selectors, timeout = 30000) {
 
       const pdf = await extractPdfResponse(page, 12000);
       if (pdf) return { download: null, page, pdfBuffer: pdf };
+      // Eusébio navigates to a rendered certificate and then opens the
+      // browser print preview. Wait for the certificate content behind that
+      // preview before generating our own PDF from the page.
+      await page.locator('body').waitFor({ state: 'visible', timeout: 3000 }).catch(() => {});
+      await page.waitForFunction(() => {
+        const t = document.body?.innerText || '';
+        return /v[aá]lida\s+at[eé]|c[oó]d\.?\s+de\s+valida[cç][aã]o|certid[aã]o negativa/i.test(t)
+          && /documento|cnpj|contribuinte/i.test(t);
+      }, { timeout: 10000 }).catch(() => {});
       const pageText = await page.locator('body').innerText({ timeout: 3000 }).catch(() => '');
       const intermediateForm = /dados\s+para\s+emiss[aã]o|tipo\s+de\s+filtro|certid[aã]o negativa contribuinte/i.test(pageText)
         && !/v[aá]lida\s+at[eé]|certid[aã]o emitida|data de validade|vencimento/i.test(pageText);
