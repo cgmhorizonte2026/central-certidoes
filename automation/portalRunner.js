@@ -209,14 +209,9 @@ async function capturePdfFromClick(page, context, selectors, timeout = 30000) {
       }, { timeout: timeout }).catch(() => null);
       await loc.click({ timeout: 7000 });
 
-      // Botões "Imprimir" de portais municipais normalmente executam
-      // window.print() na própria página, sem download ou popup. Gere o PDF
-      // diretamente pela sessão Chromium logo após o clique.
-      if (/imprimir|visualizar/i.test(selector)) {
-        await page.waitForTimeout(900).catch(() => {});
-        const printed = await printPageToPdf(page).catch(() => null);
-        if (printed && looksLikePdf(printed)) return { download: null, page, pdfBuffer: printed };
-      }
+      // Alguns portais exibem uma tela/formulário intermediário e só depois
+      // abrem o documento real. Não capture a página atual imediatamente ao
+      // clicar em Imprimir; primeiro aguarde popup, navegação ou resposta PDF.
 
       // O Fisco Web navega para uma URL assinada /imprimir/ exibida pelo
       // leitor de PDF do Chrome, sem disparar um download tradicional.
@@ -284,7 +279,9 @@ async function capturePdfFromClick(page, context, selectors, timeout = 30000) {
       const pdf = await extractPdfResponse(page, 12000);
       if (pdf) return { download: null, page, pdfBuffer: pdf };
       const pageText = await page.locator('body').innerText({ timeout: 3000 }).catch(() => '');
-      if (/Certid[aã]o Negativa de D[eé]bitos Estaduais/i.test(pageText)) {
+      const intermediateForm = /dados\s+para\s+emiss[aã]o|tipo\s+de\s+filtro|certid[aã]o negativa contribuinte/i.test(pageText)
+        && !/v[aá]lida\s+at[eé]|certid[aã]o emitida|data de validade|vencimento/i.test(pageText);
+      if (!intermediateForm && /Certid[aã]o Negativa|certid[aã]o emitida|data de validade|vencimento/i.test(pageText)) {
         const printed = await printPageToPdf(page);
         if (printed) return { download: null, page, pdfBuffer: printed };
       }
