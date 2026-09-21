@@ -183,7 +183,7 @@ async function ensureCaptchaClearBeforeSubmit({ page, browser, emit, portal, sta
   if (!(state.captcha_active && state.blocking)) return { page: current, allowed: true };
   emit({ type: 'submit_blocked_by_captcha', portal: portal.key, stage, submitAttempted: false,
     submitBlockedByCaptcha: true, captcha: state });
-  await browser.waitForCaptcha(current, 'Conclua a verificação humana na janela do órgão. A Central continuará automaticamente.', 600000, true);
+  await browser.waitForCaptcha(current, 'Conclua a verificação humana na janela do órgão. Depois clique em Continuar na Central para retomar a consulta.', 600000, true, true);
   emit({ type: 'captcha_after_user_interaction', portal: portal.key, stage });
   const after = await browser.captchaState(current).catch(() => ({ captcha_active:false, blocking:false }));
   if (after.captcha_active && after.blocking) return { page: current, allowed: false, captcha: after };
@@ -422,7 +422,7 @@ async function continueIssuanceFlow({page,context,browser,portal,baseDir,emit,ma
     for(const candidate of [...context.pages()].reverse()){const directPdf=await extractPdfResponse(candidate,5000);if(directPdf)return {pdfBuffer:directPdf,history,status:'DOCUMENTO_GERADO'};}
     const livePages=[...context.pages()].filter(p=>!p.isClosed());
     let captchaPage=null;for(const candidate of livePages){const captcha=await browser.captchaState(candidate);if(captcha.captcha_active&&captcha.blocking){captchaPage=candidate;break;}}
-    if(captchaPage){emit({type:'human_action_required',status:'AGUARDANDO_INTERACAO_USUARIO',portal:portal.key,message:'O órgão exige uma verificação humana. Resolva o CAPTCHA na mesma janela; a Central continuará desta etapa.'});await browser.waitForCaptcha(captchaPage,'Conclua a verificação humana na janela do órgão. A sessão, os cookies e os dados preenchidos serão mantidos.',600000,true);page=captchaPage;history.push({step,type:'captcha_resolvido',url:page.url()});continue;}
+    if(captchaPage){emit({type:'human_action_required',status:'AGUARDANDO_INTERACAO_USUARIO',portal:portal.key,message:'Resolva o CAPTCHA e clique em Continuar na Central para retomar.'});const resumed=await browser.waitForCaptcha(captchaPage,'Conclua a verificação humana e depois clique em Continuar na Central.',600000,true,true);if(!resumed) continue;page=captchaPage;history.push({step,type:'captcha_resolvido',url:page.url()});continue;}
     if (portal.key === 'municipal') {
       const formVisible=await (async()=>{for(const frame of context.pages().flatMap(p=>p.frames()))for(const selector of (portal.selectors?.cnpj||[])){const loc=frame.locator(selector);const n=await loc.count().catch(()=>0);for(let i=0;i<n;i++)if(await loc.nth(i).isVisible().catch(()=>false))return true;}return false;})();
       if(formVisible) { /* já estamos no formulário; não reabrir o catálogo pelo breadcrumb */ }
@@ -859,9 +859,10 @@ async function runPortal({ portal, cnpj, browser, baseDir, emit }) {
   } else if (!download && !pdfBuffer && portal.humanCaptcha !== false) {
     await browser.waitForCaptcha(
       page,
-      `Resolva o CAPTCHA na janela do portal ${portal.name}. Depois de marcar o CAPTCHA, aguarde: a Central continuará automaticamente.`,
+      `Resolva o CAPTCHA na janela do portal ${portal.name}. Depois clique em Continuar na Central para retomar.`,
       portal.captchaTimeout || 300000,
-      false
+      false,
+      true
     );
   }
 

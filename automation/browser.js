@@ -137,7 +137,7 @@ class BrowserManager {
     } catch (_) { return false; }
   }
 
-  async waitForCaptcha(page, message, timeoutMs = 600000, force = false) {
+  async waitForCaptcha(page, message, timeoutMs = 600000, force = false, waitForCentralResume = false) {
     let seenCaptcha = (await this.captchaState(page)).captcha_active;
     if (!seenCaptcha && !force) {
       this.emit({ type: 'no_captcha_detected' });
@@ -160,7 +160,14 @@ class BrowserManager {
         this.emit({ type: 'captcha_solved' });
         await page.waitForTimeout(1200);
         await page.bringToFront().catch(() => {});
+        if (!waitForCentralResume) { this.resumeResolver = null; return true; }
+        this.emit({ type:'waiting_for_central_resume', status:'AGUARDANDO_INTERACAO_USUARIO', message:'CAPTCHA validado. Clique em Continuar na Central para retomar a consulta.' });
+        await manualPromise;
+        const recheck = await this.captchaState(page);
+        this.emit({ type:'CAPTCHA_RECHECK', ...recheck, message:'Reavaliação após o usuário clicar em Continuar.' });
         this.resumeResolver = null;
+        if (recheck.captcha_active && recheck.blocking) return false;
+        this.emit({ type:'manual_resume' });
         return true;
       }
 
