@@ -161,7 +161,12 @@ class BrowserManager {
         await page.waitForTimeout(1200);
         await page.bringToFront().catch(() => {});
         if (!waitForCentralResume) { this.resumeResolver = null; return true; }
-        this.emit({ type:'waiting_for_central_resume', status:'AGUARDANDO_INTERACAO_USUARIO', message:'CAPTCHA validado. Clique em Continuar na Central para retomar a consulta.' });
+        const resumeMessage = 'CAPTCHA validado. Clique em Continuar na Central para retomar a consulta.';
+        // Re-emit the actionable event after the challenge is solved. The UI
+        // uses the latest CAPTCHA boundary, so the original prompt is no
+        // longer sufficient to keep the Continue button enabled.
+        this.emit({ type:'waiting_for_central_resume', status:'AGUARDANDO_INTERACAO_USUARIO', message:resumeMessage });
+        this.emit({ type:'human_action_required', status:'AGUARDANDO_INTERACAO_USUARIO', message:resumeMessage });
         await manualPromise;
         const recheck = await this.captchaState(page);
         this.emit({ type:'CAPTCHA_RECHECK', ...recheck, message:'Reavaliação após o usuário clicar em Continuar.' });
