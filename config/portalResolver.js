@@ -1,5 +1,6 @@
 const basePortals = require('./portals');
 const { states, municipal } = require('./registry');
+const { adapterFor } = require('../automation/providers');
 
 const normalize = value => String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
 const municipalityCodes = new Map(Object.entries(municipal).map(([code, portal]) => [normalize(portal.name.replace(/^Municipal\s*·\s*/, '')), code]));
@@ -50,7 +51,8 @@ function discoveredMunicipalPortal(company, record) {
   const common={key:'municipal',name:`Municipal · ${company.municipio}`,shortName:'Municipal',url:record.certidao_url,verifyUrl:record.certidao_url,provider:record.provider,resolutionStatus:record.status,sourceUrl:record.fonte};
   if(record.provider==='fisco-web')return {...common,selectors:{cnpj:['#cnpjcpf','input[name="cpf_cnpj"]','input[placeholder*="CPF/CNPJ" i]']},preActions:[{name:'Selecionar Certidão de Contribuinte',selectors:['input[name="tipo_certidao"][value="contribuinte"]','label:has-text("Certidão negativa/positiva de Contribuinte")'],required:true,waitMs:500}],humanCaptcha:false,beforeCaptchaActions:[],afterCaptchaActions:[{name:'Emitir Certidão',selectors:['button[type="submit"]:has-text("Emitir Certidão")','button:has-text("Emitir Certidão")'],captureDownload:true,downloadTimeout:20000,waitMs:1500}],downloadButtons:['text=Baixar','text=Imprimir','text=Download','text=PDF']};
   if(record.provider==='trimap')return {...common,selectors:{cnpj:['input[name="cpfCnpj"]','input[id$="_cpfCnpj"]']},humanCaptcha:false,preActions:[],beforeCaptchaActions:[],afterCaptchaActions:[{name:'Realizar Consulta',selectors:['button:has-text("Realizar Consulta")'],captureDownload:true,downloadTimeout:15000,waitMs:1800}],downloadButtons:['text=Reimprimir Certidão','text=Imprimir','text=Baixar','text=PDF']};
-  if(record.provider==='speedgov')return {...common,selectors:{cnpj:['#dados_documento','input[name="dados[documento]"]',...selectors.cnpj]},humanCaptcha:false,preActions:[{name:'Emitir CND',selectors:['a:has-text("Emitir CND")','button:has-text("Emitir CND")'],required:true,waitMs:1200},{name:'Selecionar Contribuinte',selectors:['a:has-text("Contribuinte")','button:has-text("Contribuinte")'],required:true,waitMs:1200}],beforeCaptchaActions:[],afterCaptchaActions:[],downloadButtons:['a[href*="impressao" i]','a:has-text("Imprimir")','text=Imprimir','text=Emitir Certidão','text=Emitir CND','text=Baixar','text=PDF']};
+  const providerAdapter = adapterFor(record.provider, common, selectors);
+  if(providerAdapter) return providerAdapter;
   return {...common,selectors,humanCaptcha:false,preActions:[],beforeCaptchaActions:[],afterCaptchaActions:[],downloadButtons:['text=Emitir Certidão','text=Emitir CND','text=Consultar','text=Imprimir','text=Baixar','text=PDF']};
 }
 
