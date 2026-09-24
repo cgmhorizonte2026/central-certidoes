@@ -67,6 +67,15 @@ class BrowserManager {
   async ensure() {
     if (this.browser && !this.browser.isConnected()) this.browser=this.context=this.page=null;
     if (!this.browser) {
+      // On Linux/VPS use the Chromium binary managed by Playwright. The
+      // Windows CDP/Chrome path below remains available for local operation.
+      if (process.platform !== 'win32') {
+        this.browser = await chromium.launch({ headless: true });
+        this.connectedToExistingChrome = false;
+        this.emit({ type: 'browser_started', message: 'Chromium gerenciado pelo Playwright iniciado no ambiente Linux.' });
+      }
+    }
+    if (!this.browser) {
       // Primeiro tenta conectar a uma instância de Chrome já iniciada com CDP.
       if (!(await this.waitForCdp(1800))) {
         await this.startChromeWithDebugging();

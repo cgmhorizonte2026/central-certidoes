@@ -1,0 +1,14 @@
+services:
+  central-certidoes:
+    build: .
+    restart: unless-stopped
+    env_file:
+      - .env
+    ports:
+      - "${PORT:-3030}:3030"
+    volumes:
+      - central_certidoes_storage:/app/storage
+    shm_size: "1gb"
+
+volumes:
+  central_certidoes_storage:

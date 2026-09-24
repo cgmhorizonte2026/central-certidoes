@@ -75,3 +75,26 @@ Validação: sequência FGTS e gravação testadas com simulação; espera human
 - A fila verifica o arquivo permanente antes de abrir os portais. Certidões com PDF existente e validade vigente são reutilizadas e marcadas como já válidas.
 - Somente certidões vencidas, sem validade identificada ou ausentes entram na emissão automática.
 - A consulta cadastral passa a guardar UF/município quando disponível. A Estadual do Ceará só roda para CNPJ com UF `CE`; para outra UF, ou UF não identificada, a etapa estadual fica pendente para evitar emissão do estado errado.
+# Execução local e demonstração Linux
+
+## Windows
+
+`npm ci` e `node server.js` mantêm o fluxo atual. A porta padrão é `3030`; use `PORT=3031` para uma instância de teste.
+
+## Docker/VPS
+
+Copie `.env.example` para `.env` e ajuste apenas as variáveis necessárias:
+
+```bash
+cp .env.example .env
+docker compose build
+docker compose up -d
+docker compose logs -f central-certidoes
+docker compose down
+```
+
+O serviço fica em `http://127.0.0.1:3030` dentro da VPS. O volume `central_certidoes_storage` preserva PDFs, `archive`, cache de portais e demais dados em `/app/storage` mesmo após recriar o container. No Linux, o `BrowserManager` usa Chromium gerenciado pelo Playwright; não abre `chrome.exe` nem expõe CDP.
+
+Para Nginx, encaminhe HTTP para a porta 3030 e preserve conexões de polling (`proxy_http_version 1.1`, `proxy_read_timeout` acima do intervalo de consulta). A aplicação atual usa long polling HTTP em `/api/session/:id`, não WebSocket.
+
+Esta etapa é de demonstração: PostgreSQL, autenticação própria, backup e alta disponibilidade permanecem fora do escopo.
