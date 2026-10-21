@@ -19,7 +19,7 @@ async function refresh(){
      clearInterval(timer);$('robot-screen').hidden=true;
      $('robot-files').innerHTML=(job.verifiedCertificateId?[job.verifiedCertificateId]:(job.files||[])).map(file=>`<a target="_blank" rel="noopener noreferrer" href="/api/certificates/${encodeURIComponent(file)}/pdf?view=1">Abrir PDF recebido</a>`).join('');return;
    }
-   const r=await fetch('/api/jobs/'+id+'/preview',{cache:'no-store'});if(!r.ok)throw Error('A página ainda não está disponível. Aguarde o carregamento do órgão.');
+   let r;try{r=await fetch('/api/jobs/'+id+'/preview',{cache:'no-store'});}catch(error){if(error instanceof TypeError)throw Error('Sem conexão com a Central local. Confirme se o servidor está aberto e tente atualizar.');throw error;}if(!r.ok)throw Error('A página ainda não está disponível. Aguarde o carregamento do órgão.');
    const next=URL.createObjectURL(await r.blob());$('robot-screen').src=next;$('robot-screen').hidden=false;if(objectUrl)URL.revokeObjectURL(objectUrl);objectUrl=next;
  }catch(e){$('robot-status').textContent=e.message;}finally{loading=false;}
 }

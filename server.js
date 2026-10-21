@@ -3,6 +3,7 @@ const path = require('path');
 const fs = require('fs');
 const os = require('os');
 const pdfParse = require('pdf-parse');
+const { prepareArchiveStorage, defaultArchiveRoots, ensureCompanyArchiveDirectory } = require('./lib/archive-storage');
 const { BrowserManager } = require('./automation/browser');
 const { runPortal } = require('./automation/portalRunner');
 const portals = require('./config/portals');
@@ -11,7 +12,7 @@ const { MunicipalPortalResolver, normalize: normalizeMunicipality } = require('.
 const municipalities = require('./config/municipalities.json').municipalities;
 
 const app = express();
-const PORT = process.env.PORT || 3030;
+const PORT = process.env.PORT || 3031;
 const BASE = __dirname;
 const DATA = path.join(BASE, 'data');
 // Dados temporários/perfil do navegador continuam dentro da versão para não
@@ -22,10 +23,8 @@ const STORAGE_ROOT = process.env.CENTRAL_CERTIDOES_STORAGE || path.join(
   process.env.LOCALAPPDATA || os.homedir(),
   'CentralCertidoes'
 );
-const STORAGE_CERTS = path.join(STORAGE_ROOT, 'certidoes');
-const STORAGE_INDEX = path.join(STORAGE_ROOT, 'archive');
 const municipalPortalResolver = new MunicipalPortalResolver({
-  cacheFile: path.join(STORAGE_ROOT, 'municipal-portals.json')
+  cacheFile: path.join(DATA, 'municipal-portals.json')
 });
 const municipalityCodeByName = new Map(municipalities.map(item => [
   `${normalizeMunicipality(item.name)}:${String(item.uf).toUpperCase()}`,
@@ -34,12 +33,31 @@ const municipalityCodeByName = new Map(municipalities.map(item => [
 
 fs.mkdirSync(path.join(DATA, 'certidoes'), { recursive: true });
 fs.mkdirSync(path.join(DATA, 'logs'), { recursive: true });
-fs.mkdirSync(STORAGE_CERTS, { recursive: true });
-fs.mkdirSync(STORAGE_INDEX, { recursive: true });
+const archiveStorage = prepareArchiveStorage(STORAGE_ROOT, defaultArchiveRoots(STORAGE_ROOT));
+let STORAGE_CERTS = archiveStorage.certs;
+let STORAGE_INDEX = archiveStorage.index;
+const ACTIVE_STORAGE_ROOT = archiveStorage.root;
+if (ACTIVE_STORAGE_ROOT !== STORAGE_ROOT) {
+  console.warn(`[STORAGE] Pasta principal sem permissão (${STORAGE_ROOT}); usando armazenamento gravável: ${ACTIVE_STORAGE_ROOT}`);
+}
+console.log(`[STORAGE] PDFs e índice: ${ACTIVE_STORAGE_ROOT}`);
 app.use(express.json({ limit: '2mb' }));
 app.get('/', (_,res)=>res.redirect('/central-certidoes.html'));
 app.use(express.static(path.join(BASE, 'public')));
 app.use('/files', express.static(DATA));
+app.use('/archive-files', (req, res, next) => {
+  let relative;
+  try { relative = decodeURIComponent(req.path).replace(/^[/\\]+/, ''); } catch (_) { return res.sendStatus(400); }
+  const roots = [STORAGE_CERTS, path.join(STORAGE_ROOT, 'certidoes'), ...defaultArchiveRoots(STORAGE_ROOT).map(root => path.join(root, 'certidoes'))];
+  for (const root of [...new Set(roots)]) {
+    const resolvedRoot = path.resolve(root);
+    const candidate = path.resolve(resolvedRoot, relative);
+    const relation = path.relative(resolvedRoot, candidate);
+    if (!relation || relation.startsWith('..' + path.sep) || path.isAbsolute(relation)) continue;
+    try { if (fs.statSync(candidate).isFile()) return res.sendFile(candidate); } catch (_) {}
+  }
+  next();
+});
 app.use('/archive-files', express.static(STORAGE_CERTS, { fallthrough: false }));
 
 const sessions = new Map();
@@ -133,6 +151,27 @@ function fileUrlForPath(filePath) {
 
 app.get('/api/health', (_, res) => res.json({ ok: true, version: '2.9.3.11' }));
 app.get('/api/portals', (_, res) => res.json(portals));
+app.get('/api/portal/:cnpj/:key', async (req,res,next) => {
+  try {
+    const cnpj=onlyDigits(req.params.cnpj),key=String(req.params.key||'');
+    if(cnpj.length!==14)return res.status(400).json({error:'CNPJ inválido.'});
+    const fixed=portals.find(item=>item.key===key);
+    if(fixed&&key!=='estadual-ce')return res.json({url:fixed.url,name:fixed.name,provider:'oficial'});
+    const company=await lookupCompany(cnpj);
+    if(key==='ceara'||key.startsWith('estadual')){
+      if(!company.uf)return res.status(422).json({error:'Não foi possível identificar a UF do CNPJ para abrir o portal estadual correto.'});
+      const portal=portalsForCompany(company).find(item=>item.key.startsWith('estadual-')||item.key==='estadual');
+      if(!portal?.url)return res.status(404).json({error:'Portal estadual não configurado para a UF identificada.'});
+      return res.json({url:portal.url,name:portal.name,provider:'oficial',municipio:company.municipio,uf:company.uf});
+    }
+    if(key!=='municipal')return res.status(400).json({error:'Tipo de certidão inválido.'});
+    if(!company.uf||!company.municipio)return res.status(422).json({error:'Não foi possível identificar município e UF para localizar o portal oficial.'});
+    const resolution=await resolvePortalsForCompany(company,{municipalResolver:municipalPortalResolver});
+    const portal=resolution.portals.find(item=>(item.key.startsWith('estadual-')?'ceara':item.key)===key);
+    if(!portal?.url)return res.status(404).json({error:'O endereço oficial desta certidão não está disponível para a empresa.'});
+    res.json({url:portal.url,name:portal.name,provider:portal.provider||'',municipio:company.municipio,uf:company.uf});
+  }catch(error){next(error);}
+});
 
 const cnpjCache = new Map();
 
@@ -201,7 +240,16 @@ async function lookupCompany(cnpj) {
 
 function archivePath(cnpj) { return path.join(STORAGE_INDEX, `${onlyDigits(cnpj)}.json`); }
 function readArchive(cnpj) {
-  try { return JSON.parse(fs.readFileSync(archivePath(cnpj), 'utf8')); } catch (_) { return { cnpj: onlyDigits(cnpj), updatedAt: null, certificates: {} }; }
+  const digits = onlyDigits(cnpj);
+  const candidateIndexes = [
+    STORAGE_INDEX,
+    path.join(STORAGE_ROOT, 'archive'),
+    ...defaultArchiveRoots(STORAGE_ROOT).map(root => path.join(root, 'archive'))
+  ];
+  for (const index of [...new Set(candidateIndexes)]) {
+    try { return JSON.parse(fs.readFileSync(path.join(index, `${digits}.json`), 'utf8')); } catch (_) {}
+  }
+  return { cnpj: digits, updatedAt: null, certificates: {} };
 }
 
 const canonicalArchiveNames = {
@@ -218,12 +266,14 @@ function persistentPdfUrl(cnpj, relativePath) {
 }
 
 function writeArchive(cnpj, portalKey, sourceFilePath, parsed, captureStage) {
-  const archive = readArchive(cnpj);
-  const key = String(portalKey).startsWith('estadual-') ? 'ceara' : portalKey;
   const digits = onlyDigits(cnpj);
   const dateDir = new Date().toISOString().slice(0, 10);
-  const destDir = path.join(STORAGE_CERTS, digits, dateDir);
-  fs.mkdirSync(destDir, { recursive: true });
+  const selectedStorage = ensureCompanyArchiveDirectory(archiveStorage.root, defaultArchiveRoots(STORAGE_ROOT), digits, dateDir);
+  STORAGE_CERTS = selectedStorage.certs;
+  STORAGE_INDEX = selectedStorage.index;
+  const archive = readArchive(cnpj);
+  const key = String(portalKey).startsWith('estadual-') ? 'ceara' : portalKey;
+  const destDir = selectedStorage.destination;
   const fileName = canonicalArchiveNames[key] || path.basename(sourceFilePath || 'CERTIDAO.pdf');
   const persistentPath = path.join(destDir, fileName);
 
@@ -252,7 +302,10 @@ function writeArchive(cnpj, portalKey, sourceFilePath, parsed, captureStage) {
     fileName,
     archivedAt: new Date().toISOString()
   };
-  fs.writeFileSync(archivePath(cnpj), JSON.stringify(archive, null, 2));
+  const indexFile = archivePath(cnpj);
+  const temporaryIndex = `${indexFile}.${process.pid}.${Date.now()}.tmp`;
+  fs.writeFileSync(temporaryIndex, JSON.stringify(archive, null, 2));
+  fs.renameSync(temporaryIndex, indexFile);
   return archive.certificates[key];
 }
 
@@ -337,15 +390,15 @@ app.get('/api/archive/:cnpj/:portal/download', (req, res) => {
 
 require('./interface-api')({app,express,fs,path,STORAGE_ROOT,STORAGE_CERTS,STORAGE_INDEX,readArchive,archivePath,parseCert,pdfParse});
 
-app.get('/api/cnpj/:cnpj', async (req, res) => {
+app.get('/api/cnpj/:cnpj', (req, res, next) => Promise.resolve().then(async () => {
   const cnpj = onlyDigits(req.params.cnpj);
   if (cnpj.length !== 14) return res.status(400).json({ error: 'CNPJ inválido.' });
   const data = await lookupCompany(cnpj);
   if (data.razao_social || data.nome_fantasia) return res.json(data);
   res.status(502).json({ error: 'Não foi possível consultar os dados cadastrais agora. Você pode continuar e informar a razão social manualmente.' });
-});
+}).catch(next));
 
-app.post('/api/session', async (req, res) => {
+app.post('/api/session', (req, res, next) => { Promise.resolve().then(async () => {
   const cnpj = onlyDigits(req.body.cnpj);
   if (cnpj.length !== 14) return res.status(400).json({ error: 'CNPJ deve conter 14 dígitos.' });
   if (activeSessionId) {
@@ -374,10 +427,25 @@ app.post('/api/session', async (req, res) => {
     startedAt: new Date().toISOString(),
     events: []
   });
-  activeSessionId = id;
-  const portalResolution = await resolvePortalsForCompany(company, { municipalResolver: municipalPortalResolver });
-  let sessionPortals = portalResolution.portals;
   const certificateKey = String(req.body.certificateKey || '');
+  activeSessionId = id;
+  let portalResolution;
+  let sessionPortals;
+  if (certificateKey && certificateKey !== 'municipal') {
+    // Consultas individuais de órgãos não municipais começam sem esperar a
+    // descoberta de prefeitura, que pode depender de vários sites externos.
+    sessionPortals = portalsForCompany(company);
+    portalResolution = { municipalResolution: { status: 'DESCOBERTA_MUNICIPAL_ADIADA' } };
+  } else if (certificateKey === 'municipal') {
+    portalResolution = await resolvePortalsForCompany(company, { municipalResolver: municipalPortalResolver });
+    sessionPortals = portalResolution.portals;
+  } else {
+    sessionPortals = portalsForCompany(company);
+    portalResolution = { municipalResolution: { status: 'DESCOBERTA_MUNICIPAL_ADIADA' } };
+    if (!sessionPortals.some(portal => portal.key === 'municipal')) {
+      sessionPortals.push({ key: 'municipal', name: 'Certidão Municipal', shortName: 'Municipal', deferredDiscovery: true });
+    }
+  }
   if (certificateKey) {
     const selectedPortal = sessionPortals.find(portal => (portal.key.startsWith('estadual-') ? 'ceara' : portal.key) === certificateKey);
     if (!selectedPortal) {
@@ -393,8 +461,32 @@ app.post('/api/session', async (req, res) => {
   sessions.get(id).portals = sessionPortals;
   sessions.get(id).municipalResolution = portalResolution.municipalResolution;
   res.json({ sessionId: id, company, municipalResolution: portalResolution.municipalResolution, portals: sessionPortals.map(p => ({ key: p.key, name: p.name })) });
-  runSession(id).catch(err => emit(id, { type: 'error', message: err.message }));
-});
+  runSession(id).catch(async err => {
+    const session = sessions.get(id);
+    if (session) {
+      session.failures ||= [];
+      session.failures.push({ portal: session.currentPortal || '', message: err.message });
+      if (session.status !== 'stopped') session.status = 'error';
+      emit(id, { type: 'error', portal: session.currentPortal || '', message: err.message });
+      emit(id, { type: 'complete', status: session.status, failures: session.failures });
+    }
+    if (activeSessionId === id) activeSessionId = null;
+    await browserManager?.close().catch(() => {});
+    browserManager = null;
+  });
+}).catch(error => {
+  const pendingId = activeSessionId;
+  const pending = pendingId && sessions.get(pendingId);
+  if (pending && !pending.portals) {
+    pending.status = 'error';
+    pending.failures = [{ portal: '', message: error.message }];
+    emit(pendingId, { type: 'error', message: error.message });
+    emit(pendingId, { type: 'complete', status: 'error', failures: pending.failures });
+    sessions.delete(pendingId);
+  }
+  activeSessionId = null;
+  next(error);
+}); });
 
 app.post('/api/session/:id/resume', (req, res) => {
   if (!sessions.has(req.params.id)) return res.status(404).json({ error: 'Sessão não encontrada.' });
@@ -403,13 +495,18 @@ app.post('/api/session/:id/resume', (req, res) => {
   res.json({ ok: true });
 });
 
-app.post('/api/session/:id/stop', async (req, res) => {
+app.post('/api/session/:id/stop', (req, res) => {
   const s = sessions.get(req.params.id);
   if (!s) return res.status(404).json({ error: 'Sessão não encontrada.' });
   s.status = 'stopped';
-  await browserManager?.close();
   emit(req.params.id, { type: 'stopped' });
   res.json({ ok: true });
+  const manager = browserManager;
+  manager?.resume();
+  if (manager) {
+    browserManager = null;
+    manager.close().catch(error => console.warn(`[SESSION] close after stop: ${error.message}`));
+  }
 });
 
 app.get('/api/session/:id', (req, res) => {
@@ -448,8 +545,33 @@ async function runSession(id) {
       ? `Portal municipal identificado para ${s.company?.municipio || 'o município cadastrado'}.`
       : `Portal municipal: ${s.municipalResolution?.status || 'PORTAL_NAO_CADASTRADO'}.`
   });
-  for (const configuredPortal of (s.portals || portalsForCompany(s.company))) {
+  for (let portalIndex = 0; portalIndex < (s.portals || portalsForCompany(s.company)).length; portalIndex++) {
+    let configuredPortal = s.portals[portalIndex];
+    if (configuredPortal.key === 'municipal' && (!configuredPortal.url || configuredPortal.deferredDiscovery)) {
+      emit(id, { type: 'municipal_discovery_started', portal: 'municipal', message: 'As demais certidões foram consultadas. Localizando o portal municipal…' });
+      const resolution = await resolvePortalsForCompany(s.company, { municipalResolver: municipalPortalResolver });
+      s.municipalResolution = resolution.municipalResolution;
+      configuredPortal = resolution.portals.find(item => item.key === 'municipal');
+      emit(id, {
+        type: 'municipal_resolution',
+        portal: 'municipal',
+        status: resolution.municipalResolution?.status || 'PORTAL_NAO_IDENTIFICADO',
+        provider: resolution.municipalResolution?.provider || '',
+        url: resolution.municipalResolution?.certidao_url || '',
+        message: configuredPortal ? `Portal municipal localizado: ${configuredPortal.name}.` : 'Não foi possível validar um portal municipal para esta empresa.'
+      });
+      if (!configuredPortal) {
+        const message = 'O portal desta certidão não foi identificado para a empresa consultada.';
+        s.failures.push({ portal: 'municipal', message });
+        emit(id, { type: 'portal_error', portal: 'municipal', message });
+        emit(id, { type: 'portal_skipped', portal: 'municipal', message });
+        continue;
+      }
+      s.portals[portalIndex] = configuredPortal;
+    }
+    if (!configuredPortal) continue;
     const portal = configuredPortal.key === 'federal' ? {...configuredPortal, captchaTimeout: 120000} : configuredPortal;
+    s.currentPortal = portal.key;
     if (s.status === 'stopped') break;
     emit(id, { type: 'portal_start', portal: portal.key, name: portal.name });
     const archiveKey = archiveKeyForPortal(portal.key);
@@ -505,7 +627,13 @@ async function runSession(id) {
   if (s.status !== 'stopped') s.status = s.failures.length ? 'partial' : 'done';
   emit(id, { type: 'complete', status:s.status, failures:s.failures });
   if (activeSessionId === id) activeSessionId = null;
+  s.currentPortal = null;
 }
 
 app.get('*', (_, res) => res.sendFile(path.join(BASE, 'public', 'central-certidoes.html')));
-app.listen(PORT, () => console.log(`Central de Certidões V2: http://localhost:${PORT}`));
+app.use((error,req,res,next)=>{
+  console.error(`[API] ${req.method} ${req.originalUrl}: ${error.stack||error.message}`);
+  if(res.headersSent)return next(error);
+  res.status(error.status||500).json({error:error.status?error.message:'A Central encontrou uma falha ao falar com o portal. A API permaneceu ativa; consulte o log do servidor.'});
+});
+app.listen(PORT, '127.0.0.1', () => console.log(`Central de Certidões V2: http://127.0.0.1:${PORT}`));

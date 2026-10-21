@@ -47,9 +47,10 @@ module.exports = [
       {
         "name": "Emitir certidão",
         "selectors": [
-          "text=Emitir Certidão",
-          "text=Emitir certidão",
-          "text=Emitir"
+          "button:has-text(\"Emitir Nova Certidão\")",
+          "a:has-text(\"Emitir Nova Certidão\")",
+          "input[type=button][value*='Emitir Nova Certidão' i]",
+          "input[type=submit][value*='Emitir Nova Certidão' i]"
         ],
         "captureDownload": true,
         "downloadTimeout": 30000,

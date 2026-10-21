@@ -190,7 +190,7 @@ async function ensureCaptchaClearBeforeSubmit({ page, browser, emit, portal, sta
   return { page: current, allowed: true, captcha: after };
 }
 
-async function capturePdfFromClick(page, context, selectors, timeout = 30000) {
+async function capturePdfFromClick(page, context, selectors, timeout = 30000, browser = null) {
   for (const scope of page.frames()) {
   for (const selector of selectors || []) {
     try {
@@ -215,7 +215,16 @@ async function capturePdfFromClick(page, context, selectors, timeout = 30000) {
 
       // O Fisco Web navega para uma URL assinada /imprimir/ exibida pelo
       // leitor de PDF do Chrome, sem disparar um download tradicional.
+      const eventSignals = [
+        downloadPromise.then(download => download ? ({ kind: 'download', download }) : null),
+        popupPromise.then(popup => popup ? ({ kind: 'popup', popup }) : null),
+        navigationPromise.then(response => response ? ({ kind: 'navigation', response }) : null),
+        pdfResponsePromise.then(response => response ? ({ kind: 'response', response }) : null)
+      ];
+      let winner = null;
       for (let attempt = 0; attempt < 32; attempt++) {
+        winner = await Promise.race([...eventSignals, page.waitForTimeout(250).then(() => null)]);
+        if (winner) break;
         const printPage = context.pages().find(candidate => /\/imprimir\//i.test(candidate.url()));
         if (printPage) {
           try {
@@ -224,16 +233,13 @@ async function capturePdfFromClick(page, context, selectors, timeout = 30000) {
             if (response.ok && looksLikePdf(body)) return { download: null, page: printPage, pdfBuffer: body };
           } catch (_) {}
         }
-        await page.waitForTimeout(250).catch(() => {});
+        const captcha = await browser?.captchaState(page).catch(() => null);
+        if (captcha?.captcha_active && captcha?.blocking) return { captchaRequired: true };
       }
 
-      const winner = await Promise.race([
-        downloadPromise.then(download => download ? ({ kind: 'download', download }) : null),
-        popupPromise.then(popup => popup ? ({ kind: 'popup', popup }) : null),
-        navigationPromise.then(response => response ? ({ kind: 'navigation', response }) : null),
-        pdfResponsePromise.then(response => response ? ({ kind: 'response', response }) : null),
-        page.waitForTimeout(timeout).then(() => null)
-      ]);
+      if (!winner) {
+        winner = await Promise.race([...eventSignals, page.waitForTimeout(timeout).then(() => null)]);
+      }
       if (winner?.kind === 'download') return { download: winner.download, page: null };
 
       const popup = winner?.kind === 'popup' ? winner.popup : null;
@@ -366,10 +372,13 @@ async function findSafeContinuation(context) {
         if(!info)continue;
         const text=normalText(info.text),contextText=normalText(info.context);
         const pdfAction=await element.locator('img[src*="pdf" i]').count().catch(()=>0)>0||/pdf/i.test(info.name+' '+info.id+' '+info.text);
-        const positive=pdfAction||/^(confirmar(?: certidao)?|continuar|prosseguir|gerar(?: certidao)?|emitir(?: certidao)?|visualizar(?: certidao)?|consultar)$/.test(text);
+        const positive=pdfAction||/^(confirmar(?: certidao)?|continuar|prosseguir|gerar(?: certidao)?|emitir(?: nova)? certidao|emitir|visualizar(?: certidao)?|consultar(?: certidao)?)$/.test(text);
         const negative=/cancelar|sair|voltar|fechar|limpar|nova emissao|novo/.test(text);
         const issuance=/certidao|certificado|debitos?|emissao|geracao/.test(contextText);
-        const modal=/confirm|deseja|prosseguir|continuar|emitir|gerar/.test(contextText)&&/certidao|documento/.test(contextText);
+        // A página de emissão costuma conter texto como "Emitir Certidão".
+        // Isso sozinho não é uma confirmação intermediária. Exija uma pergunta
+        // ou declaração de confirmação para não reenviar o formulário inicial.
+        const modal=/confirm|deseja|tem certeza|ja existe|valida encontrada|válida encontrada|solicita.*emissao|prosseguir com/.test(contextText)&&/certidao|documento/.test(contextText);
         if(positive&&!negative&&issuance&&(pdfAction||modal||/dialog|modal/.test(normalText(`${info.role} ${info.id} ${info.name}`)))) choices.push({element,page:candidatePage,frame,info,pdfAction,score:(pdfAction?8:0)+(modal?5:0)+(text.includes('certidao')?3:0)+(text.startsWith('confirmar')?2:0)});
       }
     }
@@ -417,8 +426,8 @@ async function saveUnknownState({page,portal,baseDir,previousAction,emit,history
   return diagnostic;
 }
 
-async function continueIssuanceFlow({page,context,browser,portal,baseDir,emit,maxSteps=8}) {
-  const history=[];const seenServices=new Set();let previousAction='emissão inicial';
+async function continueIssuanceFlow({page,context,browser,portal,baseDir,emit,maxSteps=8,priorActionLabels=[]}) {
+  const history=[];const seenServices=new Set();const attemptedActions=new Set();const priorLabels=new Set(priorActionLabels.map(normalText));let previousAction='emissão inicial';
   for(let step=1;step<=maxSteps;step++) {
     await page.waitForTimeout(800).catch(()=>{});
     // Aguarda respostas assíncronas do portal antes de classificar a etapa.
@@ -452,9 +461,20 @@ async function continueIssuanceFlow({page,context,browser,portal,baseDir,emit,ma
     }
     if(next.pdfAction){return {history,status:'PDF_ACTION_AVAILABLE'};}
     const beforeUrl=next.page.url(),action=next.info.text;emit({type:'continuation_action',portal:portal.key,step,action,url:beforeUrl,message:`Etapa ${step}: ${action}`});
+    const actionIdentity=[beforeUrl,next.info.tag,next.info.id,next.info.name,normalText(action)].join('|');
+    const normalizedAction=normalText(action);
+    const priorActionRepeated=priorLabels.has(normalizedAction)||([...priorLabels].includes('emitir certidao')&&normalizedAction==='emitir nova certidao');
+    if(attemptedActions.has(actionIdentity)||priorActionRepeated) {
+      emit({type:'continuation_duplicate_blocked',status:'ESTADO_DESCONHECIDO',portal:portal.key,action,url:beforeUrl,message:'A mesma ação permaneceu visível após o clique anterior; bloqueada para evitar reenvio ou loop.'});
+      await saveUnknownState({page:next.page,portal,baseDir,previousAction:action,emit,history});
+      return {history,status:'ESTADO_DESCONHECIDO'};
+    }
     const gate = await ensureCaptchaClearBeforeSubmit({page: next.page, browser, emit, portal, stage: action});
     if (!gate.allowed) { history.push({step,action,type:'captcha_blocked'}); continue; }
-    await next.element.click({timeout:7000});history.push({step,action,url:beforeUrl,at:new Date().toISOString()});previousAction=action;page=next.page;
+    attemptedActions.add(actionIdentity);
+    await next.element.click({timeout:7000});
+    await next.page.waitForTimeout(1800).catch(()=>{});
+    history.push({step,action,url:beforeUrl,at:new Date().toISOString()});previousAction=action;page=next.page;
   }
   emit({type:'continuation_limit',status:'ESTADO_DESCONHECIDO',portal:portal.key,history,message:`Limite de ${maxSteps} etapas atingido para evitar repetição.`});
   return {history,status:'ESTADO_DESCONHECIDO'};
@@ -516,240 +536,6 @@ async function printCertificatePageFromContext(context, cnpj, portalKey, timeout
   return null;
 }
 
-
-async function clickFederalValidCertificateModal(page) {
-  // IMPORTANTE: a página por trás do modal também possui um botão
-  // "Consultar Certidão". Portanto, nunca devemos procurar esse texto
-  // globalmente enquanto o modal estiver aberto. O clique precisa ficar
-  // restrito ao contêiner do modal/overlay.
-  const titles = page.getByText('Certidão Válida Encontrada', { exact: false });
-  const titleCount = await titles.count();
-
-  for (let i = 0; i < titleCount; i++) {
-    const title = titles.nth(i);
-    if (!(await title.isVisible().catch(() => false))) continue;
-
-    const containers = [
-      title.locator('xpath=ancestor::*[@role="dialog"][1]'),
-      title.locator('xpath=ancestor::*[contains(@class,"p-dialog")][1]'),
-      title.locator('xpath=ancestor::*[contains(@class,"modal")][1]'),
-      title.locator('xpath=ancestor::*[contains(@class,"cdk-overlay-pane")][1]'),
-      title.locator('xpath=ancestor::*[contains(@class,"dialog")][1]')
-    ];
-
-    for (const container of containers) {
-      if (!(await container.count())) continue;
-      if (!(await container.isVisible().catch(() => false))) continue;
-
-      // Primeiro tenta por papel/nome acessível; depois cai para seletores de texto.
-      const byRole = container.getByRole('button', { name: /Consultar Certidão/i });
-      const roleCount = await byRole.count();
-      for (let j = 0; j < roleCount; j++) {
-        const btn = byRole.nth(j);
-        if (await btn.isVisible().catch(() => false) && await btn.isEnabled().catch(() => true)) {
-          await btn.click({ timeout: 10000 });
-          return true;
-        }
-      }
-
-      const candidates = container.locator('button, a, [role="button"]').filter({ hasText: 'Consultar Certidão' });
-      const candidateCount = await candidates.count();
-      for (let j = 0; j < candidateCount; j++) {
-        const btn = candidates.nth(j);
-        if (await btn.isVisible().catch(() => false) && await btn.isEnabled().catch(() => true)) {
-          await btn.click({ timeout: 10000 });
-          return true;
-        }
-      }
-    }
-  }
-
-  return false;
-}
-
-async function federalExistingCertificateFlow(page, emit, baseDir, cnpj) {
-  // A Receita pode impedir uma nova emissão quando já existe certidão válida.
-  // Nesse caso, recuperamos a 2ª via da certidão válida mais recente.
-  const modalText = page.getByText('Certidão Válida Encontrada', { exact: false });
-  let hasModal = false;
-  const modalCount = await modalText.count();
-  for (let i = 0; i < modalCount; i++) {
-    if (await modalText.nth(i).isVisible().catch(() => false)) {
-      hasModal = true;
-      break;
-    }
-  }
-  if (!hasModal) {
-    hasModal = await modalText.first().waitFor({ state: 'visible', timeout: 6000 }).then(() => true).catch(() => false);
-  }
-  if (!hasModal) return null;
-
-  emit({ type: 'federal_valid_certificate_found', portal: 'federal' });
-
-  const consulted = await clickFederalValidCertificateModal(page);
-  if (!consulted) throw new Error('A Receita informou que existe certidão válida, mas o botão "Consultar Certidão" DENTRO DO MODAL não foi localizado.');
-
-  // A Receita é SPA; a mudança acontece no hash (#/home/cnpj/consultar).
-  const movedToConsult = await page.waitForFunction(() => {
-    return String(window.location.hash || '').toLowerCase().includes('/cnpj/consultar');
-  }, { timeout: 20000 }).then(() => true).catch(() => false);
-  if (!movedToConsult) {
-    throw new Error('O botão do modal foi acionado, mas a Receita não avançou para a tela de consulta de certidões.');
-  }
-  await page.waitForTimeout(1800);
-
-  // A tela já vem com "Data de Emissão" e período de um ano preenchidos.
-  const searched = await clickFirstVisible(page, [
-    'button:has-text("Consultar Certidão")',
-    'a:has-text("Consultar Certidão")',
-    'text=Consultar Certidão'
-  ]);
-  if (!searched) throw new Error('Não foi possível executar a consulta das certidões existentes na Receita Federal.');
-
-  await page.waitForURL(/consultar\/resultado/i, { timeout: 25000 }).catch(() => {});
-  await page.waitForTimeout(1800);
-
-  // A página da Receita usa ngx-datatable (DIVs), não uma <table> HTML.
-  // Portanto, trabalhamos diretamente com as linhas reais do componente.
-  const rows = page.locator('.ngx-datatable .datatable-body-row');
-  await rows.first().waitFor({ state: 'visible', timeout: 20000 }).catch(() => {});
-
-  const count = await rows.count();
-  const candidates = [];
-  for (let i = 0; i < count; i++) {
-    const row = rows.nth(i);
-    if (!(await row.isVisible().catch(() => false))) continue;
-    const text = String(await row.innerText().catch(() => '')).replace(/\s+/g, ' ').trim();
-    if (!/\bVálida\b/i.test(text)) continue;
-
-    // Ex.: 10/09/2026 - 10:39:41
-    const m = text.match(/(\d{2})\/(\d{2})\/(\d{4})\s*-?\s*(\d{2}):(\d{2}):(\d{2})/);
-    let stamp = 0;
-    if (m) stamp = new Date(Number(m[3]), Number(m[2]) - 1, Number(m[1]), Number(m[4]), Number(m[5]), Number(m[6])).getTime();
-
-    // O botão real foi confirmado no DevTools da Receita:
-    // <button type="button" title="Segunda via" class="br-button small circle">...</button>
-    // O valor do atributo title tem S maiúsculo. Usamos o modificador CSS "i"
-    // para tornar a comparação case-insensitive e evitar nova quebra se o portal mudar a capitalização.
-    const btn = row.locator('.row-actions button[title="Segunda via" i]');
-    if (await btn.count()) candidates.push({ i, stamp });
-  }
-
-  if (!candidates.length) {
-    // Fallback: caso o texto da situação seja renderizado fora da linha por alguma
-    // mudança visual, usa o primeiro botão visível de 2ª via encontrado no grid.
-    const allButtons = page.locator('.ngx-datatable .row-actions button[title="Segunda via" i]');
-    const n = await allButtons.count();
-    for (let i = 0; i < n; i++) {
-      const b = allButtons.nth(i);
-      if (await b.isVisible().catch(() => false)) {
-        candidates.push({ directButton: b, stamp: 0, i });
-        break;
-      }
-    }
-  }
-
-  if (!candidates.length) throw new Error('A Receita abriu a consulta, mas nenhum botão de 2ª Via foi localizado no ngx-datatable.');
-  candidates.sort((a, b) => b.stamp - a.stamp || a.i - b.i);
-
-  let secondCopyButton;
-  if (candidates[0].directButton) {
-    secondCopyButton = candidates[0].directButton;
-  } else {
-    const row = rows.nth(candidates[0].i);
-    await row.scrollIntoViewIfNeeded().catch(() => {});
-    secondCopyButton = row.locator('.row-actions button[title="Segunda via" i]').first();
-  }
-
-  await page.bringToFront().catch(() => {});
-  await secondCopyButton.waitFor({ state: 'visible', timeout: 15000 });
-  await secondCopyButton.scrollIntoViewIfNeeded().catch(() => {});
-  await page.waitForTimeout(500);
-
-  emit({ type: 'federal_second_copy_button_found', portal: 'federal', selector: '.row-actions button[title="Segunda via" i]' });
-
-  // Cria uma pasta exclusiva para ESTE download e informa ao Chrome via CDP.
-  // Assim não dependemos do nome UUID nem do evento de download do Playwright.
-  const controlledDownloadDir = await prepareControlledDownloadDir(page, baseDir, cnpj, emit, 'federal');
-  const fileSystemPdfPromise = waitForPdfInDirectory(controlledDownloadDir, 60000);
-
-  const downloadPromise = page.waitForEvent('download', { timeout: 60000 }).catch(() => null);
-  const pdfResponsePromise = page.waitForResponse(r => {
-    const ct = String(r.headers()['content-type'] || '').toLowerCase();
-    return ct.includes('application/pdf') || ct.includes('application/x-pdf');
-  }, { timeout: 60000 }).catch(() => null);
-
-  // Primeiro: clique Playwright diretamente no <button> real.
-  let clicked = false;
-  try {
-    await secondCopyButton.click({ timeout: 10000 });
-    clicked = true;
-    emit({ type: 'federal_second_copy_click_try', portal: 'federal', method: 'direct-button' });
-  } catch (err) {
-    emit({ type: 'federal_second_copy_click_try', portal: 'federal', method: 'direct-button-failed', message: String(err?.message || err) });
-  }
-
-  // Fallback: invoca o click() nativo no próprio BUTTON, nunca no ícone <i>.
-  if (!clicked) {
-    try {
-      await secondCopyButton.evaluate(el => el.click());
-      clicked = true;
-      emit({ type: 'federal_second_copy_click_try', portal: 'federal', method: 'native-button-click' });
-    } catch (err) {
-      emit({ type: 'federal_second_copy_click_try', portal: 'federal', method: 'native-button-click-failed', message: String(err?.message || err) });
-    }
-  }
-
-  if (!clicked) throw new Error('O botão HTML da 2ª Via foi localizado, mas não pôde ser acionado.');
-
-  // Aguarda download ou resposta PDF. A Receita pode baixar o arquivo com nome
-  // UUID e sem extensão; a etapa posterior valida o conteúdo %PDF- e salva .pdf.
-  const winner = await Promise.race([
-    downloadPromise.then(d => d ? ({ kind: 'download', value: d }) : null),
-    pdfResponsePromise.then(r => r ? ({ kind: 'pdf', value: r }) : null),
-    fileSystemPdfPromise.then(r => r ? ({ kind: 'filesystem', value: r }) : null),
-    page.waitForTimeout(20000).then(() => null)
-  ]);
-
-  if (winner?.kind === 'download') {
-    const d = winner.value;
-    emit({ type: 'federal_second_copy_downloaded', portal: 'federal', suggestedFilename: d.suggestedFilename() });
-    return { download: d, controlledDownloadDir };
-  }
-  if (winner?.kind === 'pdf') {
-    try {
-      const pdfBuffer = await winner.value.body();
-      emit({ type: 'federal_second_copy_downloaded', portal: 'federal', mode: 'response-body' });
-      return { pdfBuffer };
-    } catch (_) {}
-  }
-  if (winner?.kind === 'filesystem') {
-    emit({
-      type: 'federal_second_copy_downloaded',
-      portal: 'federal',
-      mode: 'controlled-download-folder',
-      sourcePath: winner.value.sourcePath
-    });
-    return { pdfBuffer: winner.value.pdfBuffer };
-  }
-
-  // Se a página confirmou a emissão, aguarda mais um pouco. Primeiro tenta o
-  // evento Playwright e, em paralelo, verifica a pasta controlada do Chrome.
-  const success = await page.getByText(/segunda via da certidão foi emitida com sucesso/i).isVisible().catch(() => false);
-  if (success) {
-    const late = await Promise.race([
-      page.waitForEvent('download', { timeout: 20000 }).then(d => d ? ({ kind: 'download', value: d }) : null).catch(() => null),
-      waitForPdfInDirectory(controlledDownloadDir, 20000).then(r => r ? ({ kind: 'filesystem', value: r }) : null)
-    ]);
-    if (late?.kind === 'download') return { download: late.value, controlledDownloadDir };
-    if (late?.kind === 'filesystem') {
-      emit({ type: 'federal_second_copy_downloaded', portal: 'federal', mode: 'controlled-download-folder-late', sourcePath: late.value.sourcePath });
-      return { pdfBuffer: late.value.pdfBuffer };
-    }
-  }
-
-  throw new Error(`O botão de 2ª Via foi acionado e a Receita confirmou a emissão, mas a Central não encontrou um PDF. Pasta monitorada: ${controlledDownloadDir}`);
-}
 
 async function runPortal({ portal, cnpj, browser, baseDir, emit }) {
   if (portal.key === 'fgts') return require('./fgtsRunner').runFgts({portal,cnpj,browser,baseDir,emit});
@@ -850,11 +636,20 @@ async function runPortal({ portal, cnpj, browser, baseDir, emit }) {
   let download = null;
   let pdfBuffer = null;
   let controlledDownloadDir = null;
+  let federalCaptchaWasBlocking = false;
+  const completedActionLabels = [];
   if (portal.key === 'federal') {
-    const existing = await federalExistingCertificateFlow(page, emit, baseDir, cnpj);
-    if (existing?.download) download = existing.download;
-    controlledDownloadDir = existing?.controlledDownloadDir || null;
-    if (existing?.pdfBuffer) pdfBuffer = existing.pdfBuffer;
+    // The previous code opened the existing-certificate search, scrolled the
+    // results grid, and tried to print a second copy. That is not the action
+    // requested by this issuance flow: when the Receita offers both choices,
+    // the configured post-CAPTCHA action below selects "Emitir Nova Certidão".
+    const validCertificateNotice = page.getByText('Certidão Válida Encontrada', { exact: false });
+    for (let i = 0; i < await validCertificateNotice.count(); i++) {
+      if (await validCertificateNotice.nth(i).isVisible().catch(() => false)) {
+        emit({ type: 'federal_valid_certificate_found', portal: 'federal', message: 'A Receita encontrou uma certidão válida. A Central seguirá pela opção oficial de emitir nova certidão.' });
+        break;
+      }
+    }
   }
 
   // Cada portal é concluído antes de iniciar o próximo. Para a Receita,
@@ -863,6 +658,10 @@ async function runPortal({ portal, cnpj, browser, baseDir, emit }) {
     await browser.waitForHumanResume('Na aba Trabalhista, digite os caracteres da imagem. Não clique em Emitir ainda; depois clique em Continuar aqui na Central para capturar o PDF.');
     if(page.isClosed()) throw new Error('A aba Trabalhista foi fechada.');
   } else if (!download && !pdfBuffer && portal.humanCaptcha !== false) {
+    if (portal.key === 'federal') {
+      const captchaState = await browser.captchaState(page).catch(() => ({captcha_active:false,blocking:false}));
+      federalCaptchaWasBlocking = !!(captchaState.captcha_active && captchaState.blocking);
+    }
     await browser.waitForCaptcha(
       page,
       `Resolva o CAPTCHA na janela do portal ${portal.name}. Depois clique em Continuar na Central para retomar.`,
@@ -879,7 +678,7 @@ async function runPortal({ portal, cnpj, browser, baseDir, emit }) {
       if (!controlledDownloadDir) {
         controlledDownloadDir = await prepareControlledDownloadDir(page, baseDir, cnpj, emit, portal.key);
       }
-      const result = await capturePdfFromClick(page, browser.context, action.selectors || [], action.downloadTimeout || 30000);
+      const result = await capturePdfFromClick(page, browser.context, action.selectors || [], action.downloadTimeout || 30000, browser);
       clicked = !!result;
       if (result?.download) download = result.download;
       if (result?.pdfBuffer) pdfBuffer = result.pdfBuffer;
@@ -907,8 +706,19 @@ async function runPortal({ portal, cnpj, browser, baseDir, emit }) {
       const gate = await ensureCaptchaClearBeforeSubmit({page, browser, emit, portal, stage: action.name || 'after_captcha_action'});
       if (gate.allowed) clicked = await clickFirstVisible(page, action.selectors || []);
     }
+    // A standard CAPTCHA form needs one submit after the operator completes
+    // it. Re-send the initial "Emitir Certidão" control only when an actual
+    // blocking challenge was observed. Without that evidence, keep the button
+    // from being clicked a second time just because it remains on screen.
+    if (!clicked && portal.key === 'federal' && federalCaptchaWasBlocking && /emitir nova certidao/i.test((action.selectors||[]).join(' '))) {
+      const gate = await ensureCaptchaClearBeforeSubmit({page,browser,emit,portal,stage:'federal_submit_after_captcha'});
+      if (gate.allowed) clicked = await clickFirstVisible(page,[
+        'button:has-text("Emitir Certidão")','a:has-text("Emitir Certidão")',
+        'input[type=button][value*="Emitir Certidão" i]','input[type=submit][value*="Emitir Certidão" i]'
+      ]);
+    }
     emit({ type: 'after_captcha_action', portal: portal.key, action: action.name || 'ação pós-CAPTCHA', clicked });
-    if (clicked) await page.waitForTimeout(action.waitMs || 2200);
+    if (clicked) { completedActionLabels.push(action.name || ''); await page.waitForTimeout(action.waitMs || 2200); }
   }
 
   // A emissão pode abrir uma ou mais confirmações intermediárias depois da
@@ -916,7 +726,7 @@ async function runPortal({ portal, cnpj, browser, baseDir, emit }) {
   // um estado terminal, sem clicar em elementos fora do contexto da emissão.
   if (!download && !pdfBuffer) {
     const continuation = await continueIssuanceFlow({
-      page, context: browser.context, browser, portal, baseDir, emit, maxSteps: 8
+      page, context: browser.context, browser, portal, baseDir, emit, maxSteps: 8, priorActionLabels:completedActionLabels
     });
     if (continuation.pdfBuffer) pdfBuffer = continuation.pdfBuffer;
     if (continuation.status === 'ESTADO_DESCONHECIDO') {

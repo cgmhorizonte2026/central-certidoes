@@ -11,64 +11,32 @@ class BrowserManager {
     this.page = null;
     this.resumeResolver = null;
     this.connectedToExistingChrome = false;
-    this.debugPort = 9222;
   }
 
-  chromePath() {
-    const candidates = [
-      process.env.CHROME_PATH,
-      path.join(process.env.PROGRAMFILES || '', 'Google', 'Chrome', 'Application', 'chrome.exe'),
-      path.join(process.env['PROGRAMFILES(X86)'] || '', 'Google', 'Chrome', 'Application', 'chrome.exe'),
-      path.join(process.env.LOCALAPPDATA || '', 'Google', 'Chrome', 'Application', 'chrome.exe')
-    ].filter(Boolean);
-    return candidates.find(fs.existsSync) || null;
+  async startManagedChrome() {
+    // A instalação para os usuários não pode depender do Chrome pessoal de
+    // cada máquina. Playwright mantém um Chromium próprio que também permite
+    // a intervenção manual em CAPTCHA, na mesma janela e sessão.
+    this.browser = await chromium.launch({ headless: false, args: ['--start-maximized'] });
+    this.connectedToExistingChrome = false;
+    this.emit({ type: 'browser_started', message: 'Chromium da Central iniciado em janela própria.' });
   }
 
-  async waitForCdp(timeoutMs = 15000) {
-    const started = Date.now();
-    while (Date.now() - started < timeoutMs) {
-      try {
-        this.browser = await chromium.connectOverCDP(`http://127.0.0.1:${this.debugPort}`);
-        this.connectedToExistingChrome = true;
-        this.emit({ type: 'browser_connected', message: 'Conectado ao Google Chrome da Central.' });
-        return true;
-      } catch (_) {
-        await new Promise(r => setTimeout(r, 350));
-      }
-    }
-    return false;
-  }
-
-  async startChromeWithDebugging() {
-    const exe = this.chromePath();
-    if (!exe) throw new Error('Google Chrome não foi encontrado no Windows.');
-
-    const profileDir = path.join(__dirname, '..', 'data', 'chrome-automation-profile');
-    fs.mkdirSync(profileDir, { recursive: true });
-
-    // Abre um Chrome separado, mas REAL, com perfil persistente e depuração remota.
-    // Não usa Chromium do Playwright e não usa --no-sandbox.
-    const args = [
-      `--remote-debugging-port=${this.debugPort}`,
-      `--user-data-dir=${profileDir}`,
-      '--start-maximized',
-      '--disable-popup-blocking',
-      'about:blank'
-    ];
-    const child = execFile(exe, args, { windowsHide: false });
-    child.on('error', err => this.emit({ type: 'browser_error', message: `Erro ao iniciar Chrome: ${err.message}` }));
-    this.emit({ type: 'browser_started', message: 'Google Chrome iniciado em sessão própria da Central, sem --no-sandbox. A automação usará a mesma sessão durante toda a fila.' });
-
-    if (!(await this.waitForCdp(20000))) {
-      throw new Error('O Chrome foi iniciado, mas a Central não conseguiu conectar à porta 9222. Feche apenas a janela do Chrome da Central e tente novamente.');
-    }
+  async focusInteractiveWindow(page = this.page) {
+    await page?.bringToFront().catch(() => {});
+    if (process.platform !== 'win32') return;
+    const script = [
+      "$p=Get-Process chrome -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 -and $_.Path -like '*\\.runtime\\browsers\\chromium-*' } | Sort-Object StartTime -Descending | Select-Object -First 1;",
+      "if($p){ Add-Type -TypeDefinition 'using System; using System.Runtime.InteropServices; public static class CentralWindowFocus { [DllImport(\"user32.dll\")] public static extern bool ShowWindowAsync(IntPtr hWnd,int nCmdShow); [DllImport(\"user32.dll\")] public static extern bool SetForegroundWindow(IntPtr hWnd); }' -ErrorAction SilentlyContinue; [void][CentralWindowFocus]::ShowWindowAsync($p.MainWindowHandle,9); [void][CentralWindowFocus]::SetForegroundWindow($p.MainWindowHandle) }"
+    ].join(' ');
+    await new Promise(resolve => execFile('powershell.exe', ['-NoProfile','-NonInteractive','-WindowStyle','Hidden','-Command',script], { windowsHide:true, timeout:3000 }, () => resolve()));
   }
 
   async ensure() {
     if (this.browser && !this.browser.isConnected()) this.browser=this.context=this.page=null;
     if (!this.browser) {
-      // On Linux/VPS use the Chromium binary managed by Playwright. The
-      // Windows CDP/Chrome path below remains available for local operation.
+      // On Linux/VPS use headless Chromium. On Windows use the managed,
+      // visible window so the operator can complete any human challenge.
       if (process.platform !== 'win32') {
         this.browser = await chromium.launch({ headless: true });
         this.connectedToExistingChrome = false;
@@ -76,10 +44,10 @@ class BrowserManager {
       }
     }
     if (!this.browser) {
-      // Primeiro tenta conectar a uma instância de Chrome já iniciada com CDP.
-      if (!(await this.waitForCdp(1800))) {
-        await this.startChromeWithDebugging();
-      }
+      // Use sempre o navegador empacotado e controlado pela Central. Além de
+      // funcionar em máquinas sem Chrome, evita conexão CDP pendurada e mantém
+      // a mesma janela disponível para resolver CAPTCHA e retomar a sessão.
+      await this.startManagedChrome();
     }
 
     const contexts = this.browser.contexts();
@@ -107,6 +75,7 @@ class BrowserManager {
   }
 
   async waitForHumanResume(message) {
+    await this.focusInteractiveWindow();
     this.emit({ type: 'human_action_required', message });
     await new Promise(resolve => { this.resumeResolver = resolve; });
     this.resumeResolver = null;
@@ -153,6 +122,7 @@ class BrowserManager {
       return true;
     }
 
+    await this.focusInteractiveWindow(page);
     this.emit({ type: 'human_action_required', message });
     let resumedManually = false;
     const manualPromise = new Promise(resolve => {
