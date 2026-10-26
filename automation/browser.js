@@ -1,7 +1,15 @@
-const { chromium } = require('playwright');
 const path = require('path');
 const fs = require('fs');
 const { execFile } = require('child_process');
+
+// Use the Chromium distributed with this installation even when the server
+// is started with `node server.js` or `npm start` instead of the Windows .bat
+// launcher. Playwright reads this variable while it is first required.
+const bundledBrowsersPath = path.join(__dirname, '..', '.runtime', 'browsers');
+if (!process.env.PLAYWRIGHT_BROWSERS_PATH) {
+  process.env.PLAYWRIGHT_BROWSERS_PATH = bundledBrowsersPath;
+}
+const { chromium } = require('playwright');
 
 class BrowserManager {
   constructor(emit, { chromiumImpl = chromium, launchTimeoutMs = 30000 } = {}) {

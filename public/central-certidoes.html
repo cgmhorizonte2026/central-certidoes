@@ -1254,8 +1254,12 @@ window.addEventListener('DOMContentLoaded',()=>{
       $('v2ProgressBar').style.width=Math.round((done+failed)/total*100)+'%';
       const progressTypes=['company_lookup_started','company_lookup_completed','municipal_discovery_started','municipal_discovery_progress','municipal_resolution','browser_starting','browser_started','portal_start','human_action_required','error','portal_error','complete','stopped'];
       const progress=s.events.slice().reverse().find(e=>progressTypes.includes(e.type));
-      const progressMessage=progress?.message||(progress?.type==='municipal_discovery_progress'?`Analisando páginas do portal municipal (${progress.visited||0} visitadas).`:progress?.type==='complete'?'Consulta finalizada.':'');
-      $('v2ProgressText').textContent=`${done}/${total} certidões arquivadas · ${failed} pendente(s)${progressMessage?' — '+progressMessage:''}${s.status==='partial'?' — Consulta concluída com pendências':''}`;
+      const failureMessages=s.events.filter(e=>e.type==='portal_error').map(e=>`${e.portal||'Portal'}: ${e.message||'falha sem detalhes'}`);
+      const reused=s.events.filter(e=>e.type==='portal_reused').length;
+      const terminalMessage=['done','partial','error','stopped'].includes(s.status)
+        ? `${done} certidão(ões) no arquivo de ${total}${reused?` (${reused} reaproveitada(s), sem nova ida ao portal)`:''}; ${failed} pendente(s).${failureMessages.length?' Último erro: '+failureMessages.at(-1):''}`
+        : progress?.message||(progress?.type==='municipal_discovery_progress'?`Analisando páginas do portal municipal (${progress.visited||0} visitadas).`:'');
+      $('v2ProgressText').textContent=terminalMessage;
       const last=s.events.slice(-12);
       $('v2Log').textContent=last.map(e=>`${e.time.slice(11,19)} — ${e.message||e.type}${e.portal?' — '+e.portal:''}`).join('\n');
       const boundary=s.events.findLastIndex(e=>['portal_start','portal_done','portal_skipped','captcha_solved','manual_resume','resumed','complete','stopped'].includes(e.type));

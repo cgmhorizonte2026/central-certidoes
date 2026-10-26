@@ -11,6 +11,19 @@ function looksLikePdf(buffer) {
   return head.includes('%PDF-');
 }
 
+function classifyFederalPortalError(text) {
+  const source = String(text || '').replace(/\s+/g, ' ').trim();
+  const match = source.match(/n[aã]o foi poss[ií]vel concluir a a[cç][aã]o para o contribuinte informado\.?\s*por favor, tente novamente dentro de alguns minutos\.?\s*(\d{2,4})(?:\s*[-–]\s*(\d{2}\/\d{2}\/\d{4}(?:\s+\d{2}:\d{2}:\d{2})?))?/i);
+  if (!match) return null;
+  return {
+    provider: 'Receita Federal',
+    portalCode: match[1],
+    occurrence: match[2] || '',
+    category: 'PORTAL_TEMPORARIAMENTE_INDISPONIVEL',
+    message: `A Receita Federal respondeu com o código ${match[1]} e pediu para tentar novamente em alguns minutos. Nenhuma certidão foi emitida nesta tentativa.`
+  };
+}
+
 async function saveDownloadAsPdf(download, finalPath) {
   const tempPath = finalPath + '.part';
   await download.saveAs(tempPath);
@@ -629,6 +642,14 @@ async function runPortal({ portal, cnpj, browser, baseDir, emit }) {
         /dados.*insuficientes para emitir a certid[aã]o/i.test(bodyText)) {
       throw new Error('A Receita Federal informou que os dados são insuficientes para emitir a certidão pela Internet. A Central seguirá para a próxima certidão.');
     }
+    const responseError = classifyFederalPortalError(bodyText);
+    if (responseError) {
+      emit({ type: 'portal_response_error', portal: 'federal', status: responseError.category, code: responseError.portalCode, occurrence: responseError.occurrence, message: responseError.message });
+      const error = new Error(responseError.message);
+      error.code = responseError.category;
+      error.portalCode = responseError.portalCode;
+      throw error;
+    }
   }
 
   // A Receita pode abrir o modal "Certidão Válida Encontrada" antes do CAPTCHA.
@@ -819,4 +840,4 @@ async function runPortal({ portal, cnpj, browser, baseDir, emit }) {
   return { filePath };
 }
 
-module.exports = { runPortal, findSafeContinuation, findMunicipalCertificateService, continueIssuanceFlow };
+module.exports = { runPortal, findSafeContinuation, findMunicipalCertificateService, continueIssuanceFlow, classifyFederalPortalError };
