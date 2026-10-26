@@ -393,7 +393,7 @@ header.top{border:0!important;padding:0 0 18px!important;margin-bottom:14px!impo
     <div class="side-link"><span>↗</span> Relatórios</div>
     <div class="side-link"><span>⚙</span> Configurações</div>
   </nav>
-  <div class="side-foot"><b>CONTROLADORIA GERAL</b><br>Município de Horizonte/CE<br><br>Central de Certidões · v2.9.3.5</div>
+  <div class="side-foot"><b>CONTROLADORIA GERAL</b><br>Município de Horizonte/CE<br><br>Central de Certidões · v2.9.3.11</div>
 </aside>
 <div class="wrap">
 
@@ -1159,7 +1159,8 @@ atualizarImpressao();
   <div style="color:#64748b;font-size:13px">A automação abre os portais e pode preencher o CNPJ. Os portais são processados um por vez. Quando houver CAPTCHA, você resolve apenas a validação humana; a Central espera a conclusão antes de avançar para a próxima certidão. O PDF capturado é incorporado automaticamente.</div>
   <div class="v2-toolbar">
     <button class="v2-btn" id="btnConsultarTodas">🤖 Consultar todas as CNDs</button>
-    <button class="v2-btn secondary" id="btnContinuar" disabled>✓ Continuar manualmente (fallback)</button>
+    <button class="v2-btn secondary" id="btnContinuar" disabled>✓ Continuar manualmente</button>
+    <button class="v2-btn secondary" id="btnAbrirInteracao" disabled>↗ Abrir janela do órgão</button>
     <button class="v2-btn danger" id="btnParar" disabled>■ Parar</button>
   </div>
   <div id="v2Human" class="v2-alert v2-hidden"><b>⚠️ Ação necessária</b><br><span id="v2HumanMsg">Resolva o CAPTCHA na janela do navegador. A Central continuará automaticamente; o botão manual é apenas uma alternativa se a detecção automática falhar.</span></div>
@@ -1210,6 +1211,7 @@ window.addEventListener('DOMContentLoaded',()=>{
   $('btnConsultarTodas').onclick=()=>startConsultation();
   window.startSingleCertificate=startConsultation;
   $('btnContinuar').onclick=async()=>{ if(!sessionId)return; $('btnContinuar').disabled=true; try{await api(`/api/session/${sessionId}/resume`,{method:'POST'});$('v2Human').classList.add('v2-hidden');log('Usuário autorizou a retomada da automação.');}catch(error){$('btnContinuar').disabled=false;log(error.message);alert(error.message);} };
+  $('btnAbrirInteracao').onclick=async()=>{ if(!sessionId)return; const btn=$('btnAbrirInteracao');btn.disabled=true;try{const result=await api(`/api/session/${sessionId}/focus`,{method:'POST'});log(`Janela do órgão trazida para a frente${result.url?' — '+result.url:''}.`);}catch(error){log(error.message);alert(error.message);}finally{btn.disabled=!$('btnContinuar')||$('btnContinuar').disabled;} };
   $('btnParar').onclick=async()=>{ if(!sessionId)return; $('btnParar').disabled=true;try{await api(`/api/session/${sessionId}/stop`,{method:'POST'});log('Sessão interrompida pelo usuário.');}catch(error){$('btnParar').disabled=false;log(error.message);alert(error.message);} };
   async function processAutoPdf(e){
     if(!e.portal || !e.fileUrl) return;
@@ -1250,25 +1252,30 @@ window.addEventListener('DOMContentLoaded',()=>{
       const failed=s.events.filter(e=>e.type==='portal_skipped').length;
       const total=Math.max(1,(s.portals||[]).length);
       $('v2ProgressBar').style.width=Math.round((done+failed)/total*100)+'%';
-      $('v2ProgressText').textContent=`${done}/${total} certidões arquivadas · ${failed} pendente(s)${s.status==='partial'?' — Consulta concluída com pendências':''}`;
+      const progressTypes=['company_lookup_started','company_lookup_completed','municipal_discovery_started','municipal_discovery_progress','municipal_resolution','browser_starting','browser_started','portal_start','human_action_required','error','portal_error','complete','stopped'];
+      const progress=s.events.slice().reverse().find(e=>progressTypes.includes(e.type));
+      const progressMessage=progress?.message||(progress?.type==='municipal_discovery_progress'?`Analisando páginas do portal municipal (${progress.visited||0} visitadas).`:progress?.type==='complete'?'Consulta finalizada.':'');
+      $('v2ProgressText').textContent=`${done}/${total} certidões arquivadas · ${failed} pendente(s)${progressMessage?' — '+progressMessage:''}${s.status==='partial'?' — Consulta concluída com pendências':''}`;
       const last=s.events.slice(-12);
       $('v2Log').textContent=last.map(e=>`${e.time.slice(11,19)} — ${e.message||e.type}${e.portal?' — '+e.portal:''}`).join('\n');
       const boundary=s.events.findLastIndex(e=>['portal_start','portal_done','portal_skipped','captcha_solved','manual_resume','resumed','complete','stopped'].includes(e.type));
       const human=s.events.slice(boundary+1).find(e=>e.type==='human_action_required');
       $('v2Human').classList.toggle('v2-hidden',!human);
       $('btnContinuar').disabled=!human;
+      $('btnAbrirInteracao').disabled=!human;
       if(human) $('v2HumanMsg').textContent=human.message;
       s.events.forEach(e=>{
         const eventKey=(e.time||'')+'|'+(e.type||'')+'|'+(e.portal||'')+'|'+(e.message||'');
         if(!processedEventKeys.has(eventKey)){processedEventKeys.add(eventKey);registrarMovimentacao(e,{cnpj:cnpjDigits()});}
         if(e.portal){
-          if(e.type==='portal_start')step(e.portal,'Consultando');
-          if(e.type==='human_action_required')step(e.portal,'CAPTCHA / ação humana');
-          if(e.type==='captcha_solved')step(e.portal,'CAPTCHA concluído — continuando');
-          if(e.type==='after_captcha_action')step(e.portal,e.clicked?'Prosseguindo automaticamente':'Procurando próxima etapa');
-          if(e.type==='portal_reused')step(e.portal,'✓ Já válida no arquivo');
+          const uiKey=String(e.portal).startsWith('estadual-')?'ceara':e.portal;
+          if(e.type==='portal_start')step(uiKey,'Consultando');
+          if(e.type==='human_action_required')step(uiKey,'CAPTCHA / ação humana');
+          if(e.type==='captcha_solved')step(uiKey,'CAPTCHA concluído — continuando');
+          if(e.type==='after_captcha_action')step(uiKey,e.clicked?'Prosseguindo automaticamente':'Procurando próxima etapa');
+          if(e.type==='portal_reused')step(uiKey,'✓ Já válida no arquivo');
           if(e.type==='downloaded'){
-            step(e.portal,'PDF capturado — arquivando documento');
+            step(uiKey,'PDF capturado — arquivando documento');
           }
           if((e.type==='pdf_archived' || e.type==='pdf_parsed') && e.fileUrl){
             const org = ORGAOS.find(o=>o.key===e.portal || (String(e.portal).startsWith('estadual-') && o.key==='ceara'));
@@ -1301,9 +1308,9 @@ window.addEventListener('DOMContentLoaded',()=>{
               window.renderDreamDashboard?.();
             }
           }
-          if(e.type==='portal_done')step(e.portal,e.reused?'✓ Já válida no arquivo':'✓ Concluída e arquivada');
-          if(e.type==='portal_error')step(e.portal,'Erro');
-          if(e.type==='portal_skipped')step(e.portal,'Pendente — seguindo fila');
+          if(e.type==='portal_done')step(uiKey,e.reused?'✓ Já válida no arquivo':'✓ Concluída e arquivada');
+          if(e.type==='portal_error')step(uiKey,'Erro');
+          if(e.type==='portal_skipped')step(uiKey,'Pendente — seguindo fila');
         }
       });
       if(['done','partial','error','stopped'].includes(s.status)){
@@ -1375,12 +1382,12 @@ body{overflow-x:hidden}
           <button class="dash-run-btn secondary" id="dashResume" disabled>✓ Continuar</button>
           <button class="dash-run-btn danger" id="dashStop" disabled>■ Parar</button>
           <div class="dash-run-status"><div class="dash-run-status-top"><b id="dashRunText">Pronto para iniciar.</b><span id="dashRunPct">0%</span></div><div class="dash-run-track"><div class="dash-run-fill" id="dashRunFill"></div></div></div>
-          <div class="dash-human" id="dashHuman">⚠ Ação necessária: resolva o CAPTCHA na janela do portal. A Central continuará automaticamente.</div>
+          <div class="dash-human" id="dashHuman"><span id="dashHumanText">⚠ Ação necessária: conclua a ação solicitada no portal.</span> <button class="dash-run-btn secondary" id="dashOpenPortal" type="button">↗ Abrir janela do órgão</button></div>
         </section>
         <section class="stepper" id="dashStepper"></section>
         <section class="cert-cards" id="dashCards"></section>
         <section class="doc-workspace"><aside class="doc-menu"><div class="doc-back">← Voltar</div><div class="doc-tab active">▣ &nbsp; Documento</div><div class="doc-tab">☷ &nbsp; Dados extraídos</div><div class="doc-tab">♢ &nbsp; Autenticidade</div><div class="doc-tab">▤ &nbsp; Observações</div></aside><div class="pdf-pane"><div class="pdf-toolbar"><b id="pdfTitle">Documento</b><span>Use os controles do leitor PDF para zoom e impressão</span></div><div class="pdf-frame" id="pdfFrame"></div></div><aside class="info-pane" id="infoPane"></aside></section>
-        <footer class="dash-footer"><span>Central de Certidões | Controladoria Geral do Município de Horizonte/CE</span><span>Versão 2.9.3.5</span></footer>
+        <footer class="dash-footer"><span>Central de Certidões | Controladoria Geral do Município de Horizonte/CE</span><span>Versão 2.9.3.11</span></footer>
       </main>`;
     document.querySelector('.wrap').prepend(root);
     const d=document.getElementById('dashCnpj'); const old=document.getElementById('cnpj');
@@ -1390,6 +1397,7 @@ body{overflow-x:hidden}
     document.getElementById('dashConsult').onclick=()=>{hydrateArchive();render();};
     document.getElementById('dashStart').onclick=startLegacy;
     document.getElementById('dashResume').onclick=()=>document.getElementById('btnContinuar')?.click();
+    document.getElementById('dashOpenPortal').onclick=()=>document.getElementById('btnAbrirInteracao')?.click();
     document.getElementById('dashStop').onclick=()=>document.getElementById('btnParar')?.click();
     document.getElementById('newQuery').onclick=()=>{d.value='';old.value='';old.dispatchEvent(new Event('input',{bubbles:true}));document.getElementById('razaoSocial').value='';companyData={};resetFormulario();selectedKey='federal';render();d.focus();};
   }
@@ -1407,7 +1415,7 @@ body{overflow-x:hidden}
     let pct=0; if(oldFill){ const raw=(oldFill.style.width||'').match(/([0-9.]+)/); if(raw)pct=Math.max(0,Math.min(100,Number(raw[1]))); }
     if(fill)fill.style.width=pct+'%'; const pctEl=document.getElementById('dashRunPct'); if(pctEl)pctEl.textContent=Math.round(pct)+'%';
     const humanOld=document.getElementById('v2Human'); const human=document.getElementById('dashHuman');
-    if(human){ human.classList.toggle('show', !!humanOld && !humanOld.classList.contains('v2-hidden')); const msg=document.getElementById('v2HumanMsg')?.textContent?.trim(); if(msg&&human.classList.contains('show')) human.textContent='⚠ Ação necessária: '+msg; }
+    if(human){ human.classList.toggle('show', !!humanOld && !humanOld.classList.contains('v2-hidden')); const msg=document.getElementById('v2HumanMsg')?.textContent?.trim(); const label=document.getElementById('dashHumanText'); if(msg&&label&&human.classList.contains('show')) label.textContent='⚠ Ação necessária: '+msg; }
   }
   function render(){
     ensure();

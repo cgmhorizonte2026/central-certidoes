@@ -4,43 +4,83 @@ const fs = require('fs');
 const { execFile } = require('child_process');
 
 class BrowserManager {
-  constructor(emit) {
+  constructor(emit, { chromiumImpl = chromium, launchTimeoutMs = 30000 } = {}) {
     this.emit = emit;
+    this.chromiumImpl = chromiumImpl;
+    this.launchTimeoutMs = launchTimeoutMs;
     this.browser = null;
     this.context = null;
     this.page = null;
     this.resumeResolver = null;
     this.connectedToExistingChrome = false;
+    this.closed = false;
   }
 
   async startManagedChrome() {
     // A instalação para os usuários não pode depender do Chrome pessoal de
     // cada máquina. Playwright mantém um Chromium próprio que também permite
     // a intervenção manual em CAPTCHA, na mesma janela e sessão.
-    this.browser = await chromium.launch({ headless: false, args: ['--start-maximized'] });
+    this.browser = await this.launchBrowser({ headless: false, args: ['--start-maximized'] });
     this.connectedToExistingChrome = false;
-    this.emit({ type: 'browser_started', message: 'Chromium da Central iniciado em janela própria.' });
+    this.emit({ type: 'browser_started', stage: 'browser_start', durationMs: this.lastLaunchDurationMs, message: 'Chromium da Central iniciado em janela própria.' });
+  }
+
+  async launchBrowser(options) {
+    const startedAt = Date.now();
+    const launch = this.chromiumImpl.launch(options);
+    let timer;
+    try {
+      const browser = await Promise.race([
+        launch,
+        new Promise((_, reject) => {
+          timer = setTimeout(() => {
+            const error = new Error(`O Chromium não iniciou em ${this.launchTimeoutMs} ms.`);
+            error.code = 'BROWSER_LAUNCH_TIMEOUT';
+            reject(error);
+          }, this.launchTimeoutMs);
+        })
+      ]);
+      this.lastLaunchDurationMs = Date.now() - startedAt;
+      if (this.closed) {
+        await browser.close().catch(() => {});
+        throw new Error('A inicialização do Chromium foi cancelada junto com a consulta.');
+      }
+      return browser;
+    } catch (error) {
+      // Se o Playwright concluir a inicialização depois do limite, fecha a
+      // instância atrasada para não deixar um Chromium órfão no computador.
+      if (error.code === 'BROWSER_LAUNCH_TIMEOUT') launch.then(browser => browser.close()).catch(() => {});
+      this.lastLaunchDurationMs = Date.now() - startedAt;
+      this.emit({ type: 'browser_start_failed', stage: 'browser_start', durationMs: this.lastLaunchDurationMs, cause: error.code || error.name || 'ERROR', message: error.message });
+      throw error;
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   async focusInteractiveWindow(page = this.page) {
     await page?.bringToFront().catch(() => {});
     if (process.platform !== 'win32') return;
+    const title = await page?.title().catch(() => '');
+    if (!title) return;
+    const safeTitle = title.replace(/'/g, "''");
     const script = [
-      "$p=Get-Process chrome -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 -and $_.Path -like '*\\.runtime\\browsers\\chromium-*' } | Sort-Object StartTime -Descending | Select-Object -First 1;",
+      `$needle='${safeTitle}'; $p=Get-Process chrome -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 -and $_.Path -like '*\\.runtime\\browsers\\chromium-*' -and $_.MainWindowTitle.StartsWith($needle,[StringComparison]::OrdinalIgnoreCase) } | Select-Object -First 1;`,
       "if($p){ Add-Type -TypeDefinition 'using System; using System.Runtime.InteropServices; public static class CentralWindowFocus { [DllImport(\"user32.dll\")] public static extern bool ShowWindowAsync(IntPtr hWnd,int nCmdShow); [DllImport(\"user32.dll\")] public static extern bool SetForegroundWindow(IntPtr hWnd); }' -ErrorAction SilentlyContinue; [void][CentralWindowFocus]::ShowWindowAsync($p.MainWindowHandle,9); [void][CentralWindowFocus]::SetForegroundWindow($p.MainWindowHandle) }"
     ].join(' ');
     await new Promise(resolve => execFile('powershell.exe', ['-NoProfile','-NonInteractive','-WindowStyle','Hidden','-Command',script], { windowsHide:true, timeout:3000 }, () => resolve()));
   }
 
   async ensure() {
+    if (this.closed) throw new Error('A sessão do navegador foi encerrada.');
     if (this.browser && !this.browser.isConnected()) this.browser=this.context=this.page=null;
     if (!this.browser) {
       // On Linux/VPS use headless Chromium. On Windows use the managed,
       // visible window so the operator can complete any human challenge.
       if (process.platform !== 'win32') {
-        this.browser = await chromium.launch({ headless: true });
+        this.browser = await this.launchBrowser({ headless: true });
         this.connectedToExistingChrome = false;
-        this.emit({ type: 'browser_started', message: 'Chromium gerenciado pelo Playwright iniciado no ambiente Linux.' });
+        this.emit({ type: 'browser_started', stage: 'browser_start', durationMs: this.lastLaunchDurationMs, message: 'Chromium gerenciado pelo Playwright iniciado no ambiente Linux.' });
       }
     }
     if (!this.browser) {
@@ -66,6 +106,7 @@ class BrowserManager {
   }
 
   async close() {
+    this.closed = true;
     this.resumeResolver?.();
     this.resumeResolver = null;
     // Nunca fecha o Chrome do usuário. Apenas desconecta a automação.

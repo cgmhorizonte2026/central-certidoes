@@ -9,6 +9,7 @@ const { runPortal } = require('./automation/portalRunner');
 const portals = require('./config/portals');
 const { portalsForCompany, resolvePortalsForCompany } = require('./config/portalResolver');
 const { MunicipalPortalResolver, normalize: normalizeMunicipality } = require('./lib/municipal-portal-resolver');
+const { SessionRegistry, runBoundedStep } = require('./lib/session-lifecycle');
 const municipalities = require('./config/municipalities.json').municipalities;
 
 const app = express();
@@ -60,9 +61,9 @@ app.use('/archive-files', (req, res, next) => {
 });
 app.use('/archive-files', express.static(STORAGE_CERTS, { fallthrough: false }));
 
-const sessions = new Map();
+const sessionRegistry = new SessionRegistry();
+const sessions = sessionRegistry.sessions;
 let browserManager;
-let activeSessionId = null;
 
 function log(sessionId, event) {
   const line = JSON.stringify({ time: new Date().toISOString(), sessionId, ...event }) + '\n';
@@ -73,7 +74,8 @@ function emit(sessionId, event) {
   const s = sessions.get(sessionId);
   if (!s) return;
   s.events.push({ time: new Date().toISOString(), ...event });
-  log(sessionId, event);
+  try { log(sessionId, event); }
+  catch (error) { console.error(`[SESSION_LOG] sessionId=${sessionId} stage=${event.stage || ''} cause=${error.code || error.message}`); }
 }
 
 function onlyDigits(v) { return String(v || '').replace(/\D/g, ''); }
@@ -149,6 +151,10 @@ function fileUrlForPath(filePath) {
   return '/files/' + rel;
 }
 
+function runBoundedOperation(stage, timeoutMs, operation) {
+  return runBoundedStep({ abortController: new AbortController() }, stage, timeoutMs, operation);
+}
+
 app.get('/api/health', (_, res) => res.json({ ok: true, version: '2.9.3.11' }));
 app.get('/api/portals', (_, res) => res.json(portals));
 app.get('/api/portal/:cnpj/:key', async (req,res,next) => {
@@ -157,7 +163,7 @@ app.get('/api/portal/:cnpj/:key', async (req,res,next) => {
     if(cnpj.length!==14)return res.status(400).json({error:'CNPJ inválido.'});
     const fixed=portals.find(item=>item.key===key);
     if(fixed&&key!=='estadual-ce')return res.json({url:fixed.url,name:fixed.name,provider:'oficial'});
-    const company=await lookupCompany(cnpj);
+    const company=await runBoundedOperation('company_lookup',22000,signal=>lookupCompany(cnpj,{signal,strict:true}));
     if(key==='ceara'||key.startsWith('estadual')){
       if(!company.uf)return res.status(422).json({error:'Não foi possível identificar a UF do CNPJ para abrir o portal estadual correto.'});
       const portal=portalsForCompany(company).find(item=>item.key.startsWith('estadual-')||item.key==='estadual');
@@ -166,34 +172,41 @@ app.get('/api/portal/:cnpj/:key', async (req,res,next) => {
     }
     if(key!=='municipal')return res.status(400).json({error:'Tipo de certidão inválido.'});
     if(!company.uf||!company.municipio)return res.status(422).json({error:'Não foi possível identificar município e UF para localizar o portal oficial.'});
-    const resolution=await resolvePortalsForCompany(company,{municipalResolver:municipalPortalResolver});
+    const resolution=await runBoundedOperation('municipal_discovery',65000,signal=>resolvePortalsForCompany(company,{municipalResolver:municipalPortalResolver,signal}));
     const portal=resolution.portals.find(item=>(item.key.startsWith('estadual-')?'ceara':item.key)===key);
-    if(!portal?.url)return res.status(404).json({error:'O endereço oficial desta certidão não está disponível para a empresa.'});
+    if(!portal?.url){
+      const status=resolution.municipalResolution?.status;
+      const httpStatus=status==='PORTAL_INACESSIVEL'?503:status==='ERRO_TECNICO'?502:404;
+      return res.status(httpStatus).json({status:status||'PORTAL_NAO_ENCONTRADO',diagnostico:resolution.municipalResolution?.diagnostico||null,error:'O portal municipal não foi localizado ou validado para a empresa.'});
+    }
     res.json({url:portal.url,name:portal.name,provider:portal.provider||'',municipio:company.municipio,uf:company.uf});
-  }catch(error){next(error);}
+  }catch(error){if(error.code==='STEP_TIMEOUT')error.status=504;else if(error.code==='COMPANY_LOOKUP_FAILED')error.status=502;else if(!error.status)error.status=502;next(error);}
 });
 
 const cnpjCache = new Map();
 
-async function fetchJsonWithTimeout(url, timeoutMs = 9000) {
+async function fetchJsonWithTimeout(url, timeoutMs = 9000, parentSignal) {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const abortFromParent = () => controller.abort(parentSignal.reason || new Error('Consulta cancelada.'));
+  parentSignal?.addEventListener('abort', abortFromParent, { once: true });
+  const timer = setTimeout(() => controller.abort(new Error(`Timeout após ${timeoutMs} ms: ${url}`)), timeoutMs);
   try {
     const r = await fetch(url, { headers: { 'Accept': 'application/json' }, signal: controller.signal });
     const data = await r.json().catch(() => ({}));
     return { ok: r.ok, status: r.status, data };
   } finally {
     clearTimeout(timer);
+    parentSignal?.removeEventListener('abort', abortFromParent);
   }
 }
 
-async function lookupCompany(cnpj) {
+async function lookupCompany(cnpj, { signal, strict = false } = {}) {
   const cached = cnpjCache.get(cnpj);
   if (cached && Date.now() - cached.time < 6 * 60 * 60 * 1000) return cached.data;
 
   const providers = [
     async () => {
-      const r = await fetchJsonWithTimeout(`https://brasilapi.com.br/api/cnpj/v1/${cnpj}`);
+      const r = await fetchJsonWithTimeout(`https://brasilapi.com.br/api/cnpj/v1/${cnpj}`, 9000, signal);
       if (!r.ok || !r.data?.razao_social) throw new Error(`BrasilAPI ${r.status}`);
       return {
         razao_social: r.data.razao_social || '',
@@ -207,7 +220,7 @@ async function lookupCompany(cnpj) {
       };
     },
     async () => {
-      const r = await fetchJsonWithTimeout(`https://www.receitaws.com.br/v1/cnpj/${cnpj}`);
+      const r = await fetchJsonWithTimeout(`https://www.receitaws.com.br/v1/cnpj/${cnpj}`, 9000, signal);
       if (!r.ok || !r.data?.nome) throw new Error(`ReceitaWS ${r.status}`);
       return {
         razao_social: r.data.nome || '',
@@ -221,6 +234,7 @@ async function lookupCompany(cnpj) {
     }
   ];
 
+  const failures = [];
   for (const provider of providers) {
     try {
       const data = await provider();
@@ -232,7 +246,17 @@ async function lookupCompany(cnpj) {
       data.codigo_ibge = data.municipio_codigo_ibge;
       cnpjCache.set(cnpj, { time: Date.now(), data });
       return data;
-    } catch (_) {}
+    } catch (error) {
+      if (signal?.aborted) throw signal.reason || error;
+      failures.push(error);
+    }
+  }
+  if (strict) {
+    const error = new Error(failures.length
+      ? `Falha ao consultar os dados cadastrais nas fontes disponíveis: ${failures.map(item => item.message).join('; ')}`
+      : 'CNPJ não localizado nas fontes cadastrais disponíveis.');
+    error.code = failures.length ? 'COMPANY_LOOKUP_FAILED' : 'COMPANY_NOT_FOUND';
+    throw error;
   }
   return { razao_social: '', nome_fantasia: '', uf: '', municipio: '', logradouro:'', numero:'', complemento:'', bairro:'', cep:'', fonte: '' };
 }
@@ -398,113 +422,130 @@ app.get('/api/cnpj/:cnpj', (req, res, next) => Promise.resolve().then(async () =
   res.status(502).json({ error: 'Não foi possível consultar os dados cadastrais agora. Você pode continuar e informar a razão social manualmente.' });
 }).catch(next));
 
-app.post('/api/session', (req, res, next) => { Promise.resolve().then(async () => {
+const sessionPortalNames = {
+  federal: 'Certidão Federal', fgts: 'Certificado FGTS', trabalhista: 'Certidão Trabalhista',
+  ceara: 'Certidão Estadual', municipal: 'Certidão Municipal'
+};
+
+function sessionPortalSummary(certificateKey) {
+  const keys = certificateKey ? [certificateKey] : Object.keys(sessionPortalNames);
+  return keys.map(key => ({ key, name: sessionPortalNames[key] || key }));
+}
+
+async function runSessionStage(session, stage, timeoutMs, operation) {
+  const startedAt = Date.now();
+  session.currentStage = stage;
+  emit(session.id, { type: 'stage_started', stage, timeoutMs, durationMs: 0, message: stage });
+  try {
+    const result = await runBoundedStep(session, stage, timeoutMs, operation);
+    emit(session.id, { type: 'stage_completed', stage, durationMs: Date.now() - startedAt });
+    return result;
+  } catch (error) {
+    emit(session.id, {
+      type: session.abortController.signal.aborted ? 'stage_cancelled' : 'stage_failed',
+      stage,
+      durationMs: Date.now() - startedAt,
+      cause: error.code || error.name || 'ERROR',
+      message: error.message
+    });
+    throw error;
+  }
+}
+
+app.post('/api/session', (req, res) => {
   const cnpj = onlyDigits(req.body.cnpj);
   if (cnpj.length !== 14) return res.status(400).json({ error: 'CNPJ deve conter 14 dígitos.' });
-  if (activeSessionId) {
-    const active = sessions.get(activeSessionId);
-    const lastEvent = active?.events?.length ? active.events[active.events.length - 1] : null;
-    const lastAt = Date.parse(lastEvent?.time || active?.startedAt || 0);
-    // Recupera sessões abandonadas por fechamento do navegador/terminal.
-    // Uma consulta ativa normal sempre produz eventos em menos de cinco minutos.
-    if (active && active.status === 'running' && (!lastAt || Date.now() - lastAt > 5 * 60 * 1000)) {
-      active.status = 'stopped';
-      activeSessionId = null;
-      await browserManager?.close().catch(() => {});
-      browserManager = null;
-    } else {
-      return res.status(409).json({ error: 'Já existe uma consulta em andamento. Aguarde sua conclusão.' });
-    }
+  if (sessionRegistry.activeId) {
+    const active = sessions.get(sessionRegistry.activeId);
+    if (!active || ['done', 'partial', 'error', 'stopped'].includes(active.status)) sessionRegistry.release(sessionRegistry.activeId);
+    else return res.status(409).json({ error: 'Já existe uma consulta em andamento. Aguarde ou cancele a sessão ativa.' });
   }
+
   const id = `${Date.now()}-${Math.random().toString(36).slice(2,8)}`;
-  const company = await lookupCompany(cnpj).catch(() => ({ uf: '', municipio: '' }));
-  sessions.set(id, {
-    id,
-    cnpj,
-    razaoSocial: req.body.razaoSocial || company.razao_social || '',
-    company,
-    status: 'running',
-    startedAt: new Date().toISOString(),
-    events: []
-  });
   const certificateKey = String(req.body.certificateKey || '');
-  activeSessionId = id;
-  let portalResolution;
-  let sessionPortals;
-  if (certificateKey && certificateKey !== 'municipal') {
-    // Consultas individuais de órgãos não municipais começam sem esperar a
-    // descoberta de prefeitura, que pode depender de vários sites externos.
-    sessionPortals = portalsForCompany(company);
-    portalResolution = { municipalResolution: { status: 'DESCOBERTA_MUNICIPAL_ADIADA' } };
-  } else if (certificateKey === 'municipal') {
-    portalResolution = await resolvePortalsForCompany(company, { municipalResolver: municipalPortalResolver });
-    sessionPortals = portalResolution.portals;
-  } else {
-    sessionPortals = portalsForCompany(company);
-    portalResolution = { municipalResolution: { status: 'DESCOBERTA_MUNICIPAL_ADIADA' } };
-    if (!sessionPortals.some(portal => portal.key === 'municipal')) {
-      sessionPortals.push({ key: 'municipal', name: 'Certidão Municipal', shortName: 'Municipal', deferredDiscovery: true });
-    }
-  }
-  if (certificateKey) {
-    const selectedPortal = sessionPortals.find(portal => (portal.key.startsWith('estadual-') ? 'ceara' : portal.key) === certificateKey);
-    if (!selectedPortal) {
-      activeSessionId = null; sessions.delete(id);
-      return res.status(400).json({
-        error:'O portal desta certidão não foi identificado para a empresa consultada.',
-        status: certificateKey === 'municipal' ? portalResolution.municipalResolution.status : 'PORTAL_NAO_CADASTRADO',
-        municipalResolution: portalResolution.municipalResolution
-      });
-    }
-    sessionPortals = [selectedPortal];
-  }
-  sessions.get(id).portals = sessionPortals;
-  sessions.get(id).municipalResolution = portalResolution.municipalResolution;
-  res.json({ sessionId: id, company, municipalResolution: portalResolution.municipalResolution, portals: sessionPortals.map(p => ({ key: p.key, name: p.name })) });
-  runSession(id).catch(async err => {
-    const session = sessions.get(id);
-    if (session) {
-      session.failures ||= [];
-      session.failures.push({ portal: session.currentPortal || '', message: err.message });
-      if (session.status !== 'stopped') session.status = 'error';
-      emit(id, { type: 'error', portal: session.currentPortal || '', message: err.message });
-      emit(id, { type: 'complete', status: session.status, failures: session.failures });
-    }
-    if (activeSessionId === id) activeSessionId = null;
-    await browserManager?.close().catch(() => {});
-    browserManager = null;
+  if (certificateKey && !sessionPortalNames[certificateKey]) return res.status(400).json({ error: 'Tipo de certidão inválido.' });
+  const session = {
+    id, cnpj, certificateKey,
+    razaoSocial: String(req.body.razaoSocial || ''),
+    company: null, status: 'running', startedAt: new Date().toISOString(),
+    currentStage: 'identificando_empresa', events: [], failures: [],
+    abortController: new AbortController(), browserManager: null
+  };
+  if (!sessionRegistry.reserve(session)) return res.status(409).json({ error: 'Já existe uma consulta em andamento.' });
+  emit(id, { type: 'company_lookup_started', stage: 'identificando_empresa', durationMs: 0, message: 'Identificando município e dados cadastrais do CNPJ.' });
+
+  // Responde antes do lookup e da descoberta: a interface já conhece o ID da
+  // sessão e pode exibir progresso ou cancelar a consulta enquanto isso ocorre.
+  res.status(202).json({
+    sessionId: id,
+    company: null,
+    municipalResolution: { status: 'EM_PROCESSAMENTO' },
+    portals: sessionPortalSummary(certificateKey)
   });
-}).catch(error => {
-  const pendingId = activeSessionId;
-  const pending = pendingId && sessions.get(pendingId);
-  if (pending && !pending.portals) {
-    pending.status = 'error';
-    pending.failures = [{ portal: '', message: error.message }];
-    emit(pendingId, { type: 'error', message: error.message });
-    emit(pendingId, { type: 'complete', status: 'error', failures: pending.failures });
-    sessions.delete(pendingId);
+  setImmediate(() => {
+    runSession(id).catch(error => finalizeSessionFailure(id, error));
+  });
+});
+
+async function finalizeSessionFailure(id, error) {
+  const session = sessions.get(id);
+  if (!session) return;
+  if (session.status !== 'stopped' && !session.abortController.signal.aborted) {
+    session.status = 'error';
+    session.failures ||= [];
+    session.failures.push({ portal: session.currentPortal || '', stage: session.currentStage || '', message: error.message, code: error.code || '' });
+    emit(id, { type: 'error', stage: session.currentStage || '', cause: error.code || error.name || 'ERROR', message: error.message });
   }
-  activeSessionId = null;
-  next(error);
-}); });
+  if (!session.completeEventSent) {
+    session.completeEventSent = true;
+    emit(id, { type: 'complete', status: session.status, failures: session.failures || [] });
+  }
+  session.completedAt ||= new Date().toISOString();
+  sessionRegistry.release(id);
+  const manager = session.browserManager;
+  if (browserManager === manager) browserManager = null;
+  await manager?.close().catch(closeError => console.warn(`[SESSION] close after failure: ${closeError.message}`));
+}
 
 app.post('/api/session/:id/resume', (req, res) => {
-  if (!sessions.has(req.params.id)) return res.status(404).json({ error: 'Sessão não encontrada.' });
-  browserManager?.resume();
+  const session = sessions.get(req.params.id);
+  if (!session) return res.status(404).json({ error: 'Sessão não encontrada.' });
+  if (session.status !== 'running' || sessionRegistry.activeId !== req.params.id || !session.browserManager?.resumeResolver) {
+    return res.status(409).json({ error: 'A sessão não está aguardando uma interação manual.' });
+  }
+  session.browserManager.resume();
   emit(req.params.id, { type: 'user_resumed' });
   res.json({ ok: true });
+});
+
+app.post('/api/session/:id/focus', async (req, res) => {
+  const s = sessions.get(req.params.id);
+  if (!s) return res.status(404).json({ error: 'Sessão não encontrada.' });
+  if (sessionRegistry.activeId !== req.params.id || s.status !== 'running' || !s.browserManager?.page) {
+    return res.status(409).json({ error: 'Não há uma janela ativa desta consulta para abrir.' });
+  }
+  try {
+    await s.browserManager.focusInteractiveWindow(s.browserManager.page);
+    emit(req.params.id, { type: 'interactive_window_focused', url: s.browserManager.page.url() });
+    res.json({ ok: true, url: s.browserManager.page.url() });
+  } catch (error) {
+    res.status(500).json({ error: `Não foi possível trazer a janela do órgão para a frente: ${error.message}` });
+  }
 });
 
 app.post('/api/session/:id/stop', (req, res) => {
   const s = sessions.get(req.params.id);
   if (!s) return res.status(404).json({ error: 'Sessão não encontrada.' });
-  s.status = 'stopped';
-  emit(req.params.id, { type: 'stopped' });
+  if (!sessionRegistry.cancel(req.params.id)) return res.status(409).json({ error: 'A consulta já foi encerrada.' });
+  emit(req.params.id, { type: 'stopped', stage: s.currentStage || '', cause: 'USER_CANCELLED', message: 'Consulta interrompida pelo usuário.' });
+  s.completeEventSent = true;
+  emit(req.params.id, { type: 'complete', status: 'stopped', failures: s.failures || [] });
+  s.completedAt = new Date().toISOString();
   res.json({ ok: true });
-  const manager = browserManager;
+  const manager = s.browserManager;
   manager?.resume();
   if (manager) {
-    browserManager = null;
+    if (browserManager === manager) browserManager = null;
     manager.close().catch(error => console.warn(`[SESSION] close after stop: ${error.message}`));
   }
 });
@@ -525,86 +566,133 @@ app.post('/api/parse-pdf', async (req, res) => {
 
 async function runSession(id) {
   const s = sessions.get(id);
-  if (activeSessionId !== id) return;
-  browserManager = new BrowserManager(e => emit(id, e));
-  s.failures = [];
-  const archive = readArchive(s.cnpj);
-  const uf = String(s.company?.uf || '').toUpperCase();
-  emit(id, {
-    type: 'company_state_detected',
-    uf,
-    municipio: s.company?.municipio || '',
-    message: uf ? `UF cadastral identificada: ${uf}` : 'Não foi possível identificar a UF cadastral automaticamente.'
-  });
-  emit(id, {
-    type: 'municipal_resolution',
-    status: s.municipalResolution?.status || 'PORTAL_NAO_CADASTRADO',
-    portal: s.municipalResolution?.certidao_url || '',
-    provider: s.municipalResolution?.provider || '',
-    message: s.municipalResolution?.status === 'PORTAL_ENCONTRADO'
-      ? `Portal municipal identificado para ${s.company?.municipio || 'o município cadastrado'}.`
-      : `Portal municipal: ${s.municipalResolution?.status || 'PORTAL_NAO_CADASTRADO'}.`
-  });
-  for (let portalIndex = 0; portalIndex < (s.portals || portalsForCompany(s.company)).length; portalIndex++) {
-    let configuredPortal = s.portals[portalIndex];
-    if (configuredPortal.key === 'municipal' && (!configuredPortal.url || configuredPortal.deferredDiscovery)) {
-      emit(id, { type: 'municipal_discovery_started', portal: 'municipal', message: 'As demais certidões foram consultadas. Localizando o portal municipal…' });
-      const resolution = await resolvePortalsForCompany(s.company, { municipalResolver: municipalPortalResolver });
-      s.municipalResolution = resolution.municipalResolution;
-      configuredPortal = resolution.portals.find(item => item.key === 'municipal');
-      emit(id, {
-        type: 'municipal_resolution',
-        portal: 'municipal',
-        status: resolution.municipalResolution?.status || 'PORTAL_NAO_IDENTIFICADO',
-        provider: resolution.municipalResolution?.provider || '',
-        url: resolution.municipalResolution?.certidao_url || '',
-        message: configuredPortal ? `Portal municipal localizado: ${configuredPortal.name}.` : 'Não foi possível validar um portal municipal para esta empresa.'
-      });
-      if (!configuredPortal) {
-        const message = 'O portal desta certidão não foi identificado para a empresa consultada.';
-        s.failures.push({ portal: 'municipal', message });
-        emit(id, { type: 'portal_error', portal: 'municipal', message });
-        emit(id, { type: 'portal_skipped', portal: 'municipal', message });
+  if (!s || sessionRegistry.activeId !== id || s.status !== 'running') return;
+  s.failures ||= [];
+  let archive;
+  try {
+    emit(id, { type: 'company_lookup_started', stage: 'identificando_empresa', message: 'Identificando município e dados cadastrais do CNPJ.' });
+    s.company = await runSessionStage(s, 'company_lookup', 22000, signal => lookupCompany(s.cnpj, { signal, strict: true }));
+    s.razaoSocial ||= s.company.razao_social || s.company.nome_fantasia || '';
+    const uf = String(s.company.uf || '').toUpperCase();
+    emit(id, {
+      type: 'company_lookup_completed', stage: 'identificando_empresa', durationMs: Date.now() - Date.parse(s.startedAt),
+      municipio: s.company.municipio || '', uf, codigoIbge: s.company.municipio_codigo_ibge || '', razaoSocial: s.razaoSocial,
+      message: s.company.municipio ? `Município identificado: ${s.company.municipio}/${uf}.` : 'CNPJ consultado; município não disponível nas fontes cadastrais.'
+    });
+    emit(id, {
+      type: 'company_state_detected', uf, municipio: s.company.municipio || '',
+      message: uf ? `UF cadastral identificada: ${uf}` : 'Não foi possível identificar a UF cadastral automaticamente.'
+    });
+    if (s.abortController.signal.aborted) return;
+
+    let sessionPortals = portalsForCompany(s.company);
+    const knownMunicipal = sessionPortals.find(portal => portal.key === 'municipal');
+    if (s.certificateKey === 'municipal') {
+      sessionPortals = [{ key: 'municipal', name: `Municipal · ${s.company.municipio || 'município não identificado'}`, shortName: 'Municipal', deferredDiscovery: true }];
+    } else if (s.certificateKey) {
+      const selected = sessionPortals.find(portal => (portal.key.startsWith('estadual-') ? 'ceara' : portal.key) === s.certificateKey);
+      if (!selected) {
+        const error = new Error(`A certidão ${s.certificateKey} não está configurada para a UF identificada (${uf || 'desconhecida'}).`);
+        error.code = 'PORTAL_NAO_CONFIGURADO';
+        throw error;
+      }
+      sessionPortals = [selected];
+    } else if (!knownMunicipal) {
+      sessionPortals.push({ key: 'municipal', name: `Municipal · ${s.company.municipio || 'município não identificado'}`, shortName: 'Municipal', deferredDiscovery: true });
+    }
+    s.portals = sessionPortals;
+    s.municipalResolution = knownMunicipal
+      ? { status: 'PORTAL_ENCONTRADO', certidao_url: knownMunicipal.url, provider: knownMunicipal.provider || 'registry' }
+      : { status: 'DESCOBERTA_MUNICIPAL_ADIADA' };
+    emit(id, {
+      type: 'municipal_resolution', status: s.municipalResolution.status,
+      portal: s.municipalResolution.certidao_url || '', provider: s.municipalResolution.provider || '',
+      message: knownMunicipal ? `Portal municipal disponível para ${s.company.municipio}.` : 'Portal municipal será procurado nesta consulta.'
+    });
+    archive = readArchive(s.cnpj);
+
+    for (let portalIndex = 0; portalIndex < s.portals.length; portalIndex++) {
+      if (s.abortController.signal.aborted || s.status === 'stopped') break;
+      let configuredPortal = s.portals[portalIndex];
+      if (configuredPortal.key === 'municipal' && (!configuredPortal.url || configuredPortal.deferredDiscovery)) {
+        if (!s.company.municipio || !s.company.uf || !/^\d{7}$/.test(String(s.company.municipio_codigo_ibge || ''))) {
+          s.municipalResolution = { status: 'MUNICIPIO_NAO_IDENTIFICADO' };
+          const message = 'Município/UF/código IBGE não foram confirmados; a busca do portal municipal não foi iniciada.';
+          s.failures.push({ portal: 'municipal', kind: 'MUNICIPIO_NAO_IDENTIFICADO', message });
+          emit(id, { type: 'municipal_resolution', portal: 'municipal', status: 'MUNICIPIO_NAO_IDENTIFICADO', message });
+          emit(id, { type: 'portal_error', portal: 'municipal', kind: 'MUNICIPIO_NAO_IDENTIFICADO', message });
+          emit(id, { type: 'portal_skipped', portal: 'municipal', message });
+          continue;
+        }
+        emit(id, { type: 'municipal_discovery_started', stage: 'municipal_discovery', portal: 'municipal', message: `Procurando portal municipal de ${s.company.municipio}/${s.company.uf}…` });
+        const discoveryStarted = Date.now();
+        try {
+          const resolution = await runSessionStage(s, 'municipal_discovery', 65000, signal => resolvePortalsForCompany(s.company, {
+            municipalResolver: municipalPortalResolver,
+            signal,
+            onProgress: progress => emit(id, { type: 'municipal_discovery_progress', stage: 'municipal_discovery', durationMs: Date.now() - discoveryStarted, ...progress })
+          }));
+          s.municipalResolution = resolution.municipalResolution;
+          configuredPortal = resolution.portals.find(item => item.key === 'municipal');
+          if (configuredPortal) {
+            s.portals[portalIndex] = configuredPortal;
+            emit(id, { type: 'municipal_resolution', portal: 'municipal', status: 'PORTAL_ENCONTRADO', provider: resolution.municipalResolution?.provider || '', url: configuredPortal.url, durationMs: Date.now() - discoveryStarted, message: `Portal municipal encontrado: ${configuredPortal.name}.` });
+          } else {
+            const status = resolution.municipalResolution?.status || 'PORTAL_NAO_ENCONTRADO';
+            const reason = status === 'PORTAL_INACESSIVEL' ? 'O portal da prefeitura ou os serviços municipais estão inacessíveis.'
+              : status === 'MUNICIPIO_NAO_IDENTIFICADO' ? 'O município não foi identificado para procurar o portal.'
+                : 'A busca terminou sem encontrar um portal municipal de certidões validado.';
+            const message = `${reason} (${s.company.municipio}/${s.company.uf}).`;
+            s.failures.push({ portal: 'municipal', kind: status, message, diagnostic: resolution.municipalResolution?.diagnostico });
+            emit(id, { type: 'municipal_resolution', portal: 'municipal', status, durationMs: Date.now() - discoveryStarted, diagnostic: resolution.municipalResolution?.diagnostico, message });
+            emit(id, { type: 'portal_error', portal: 'municipal', kind: status, message });
+            emit(id, { type: 'portal_skipped', portal: 'municipal', message });
+            continue;
+          }
+        } catch (error) {
+          if (s.abortController.signal.aborted || s.status === 'stopped') break;
+          const kind = error.code === 'STEP_TIMEOUT' ? 'ERRO_TECNICO' : (error.code === 'HTTP_TIMEOUT' ? 'PORTAL_INACESSIVEL' : 'ERRO_TECNICO');
+          s.municipalResolution = { status: kind, diagnostico: { stage: 'municipal_discovery', cause: error.code || error.name, message: error.message } };
+          const message = kind === 'PORTAL_INACESSIVEL'
+            ? `A validação dos portais municipais excedeu o tempo de resposta: ${error.message}`
+            : `Erro técnico durante a descoberta municipal: ${error.message}`;
+          s.failures.push({ portal: 'municipal', kind, message, stage: 'municipal_discovery' });
+          emit(id, { type: 'municipal_resolution', portal: 'municipal', status: kind, durationMs: Date.now() - discoveryStarted, cause: error.code || error.name, message });
+          emit(id, { type: 'portal_error', portal: 'municipal', kind, message });
+          emit(id, { type: 'portal_skipped', portal: 'municipal', message: 'Consulta municipal encerrada com falha; outras consultas e novas sessões continuam disponíveis.' });
+          continue;
+        }
+      }
+
+      if (!configuredPortal) continue;
+      const portal = configuredPortal.key === 'federal' ? { ...configuredPortal, captchaTimeout: 120000 } : configuredPortal;
+      s.currentPortal = portal.key;
+      emit(id, { type: 'portal_start', portal: portal.key, name: portal.name, message: `Iniciando consulta: ${portal.name}.` });
+      const archiveKey = archiveKeyForPortal(portal.key);
+      const existing = archive.certificates?.[archiveKey];
+      if (isCertificateCurrent(existing) && (portal.key !== 'fgts' || existing.source === 'manual' || existing.captureStage === 'fgts-print-view')) {
+        emit(id, { type: 'portal_reused', portal: portal.key, name: portal.name, validade: existing.validade, message: `${portal.name} já está válida no arquivo até ${existing.validade}.` });
+        emit(id, { type: 'portal_done', portal: portal.key, filePath: existing.filePath, fileUrl: existing.fileUrl, reused: true });
+        emit(id, reuseEventForCertificate(portal, existing));
+        emit(id, { type: 'pdf_parsed', portal: portal.key, parsed: { status: existing.status || '', validade: existing.validade || '', numero: existing.numero || '' }, filePath: existing.filePath, fileUrl: existing.fileUrl, viewUrl: existing.viewUrl || existing.fileUrl, downloadUrl: existing.downloadUrl || existing.fileUrl, fileName: existing.fileName });
         continue;
       }
-      s.portals[portalIndex] = configuredPortal;
-    }
-    if (!configuredPortal) continue;
-    const portal = configuredPortal.key === 'federal' ? {...configuredPortal, captchaTimeout: 120000} : configuredPortal;
-    s.currentPortal = portal.key;
-    if (s.status === 'stopped') break;
-    emit(id, { type: 'portal_start', portal: portal.key, name: portal.name });
-    const archiveKey = archiveKeyForPortal(portal.key);
-    const existing = archive.certificates?.[archiveKey];
-    if (isCertificateCurrent(existing) && (portal.key !== 'fgts' || existing.source === 'manual' || existing.captureStage === 'fgts-print-view')) {
-      emit(id, {
-        type: 'portal_reused',
-        portal: portal.key,
-        name: portal.name,
-        validade: existing.validade,
-        message: `${portal.name} já está válida no arquivo até ${existing.validade}.`
-      });
-      emit(id, { type: 'portal_done', portal: portal.key, filePath: existing.filePath, fileUrl: existing.fileUrl, reused: true });
-      emit(id, reuseEventForCertificate(portal, existing));
-      emit(id, { type: 'pdf_parsed', portal: portal.key, parsed: { status: existing.status || '', validade: existing.validade || '', numero: existing.numero || '' }, filePath: existing.filePath, fileUrl: existing.fileUrl, viewUrl: existing.viewUrl || existing.fileUrl, downloadUrl: existing.downloadUrl || existing.fileUrl, fileName: existing.fileName });
-      continue;
-    }
-    if (portal.key === 'estadual-ce' && uf !== 'CE') {
-      const message = uf
-        ? `CNPJ cadastrado na UF ${uf}. A automação estadual do Ceará foi ignorada para não emitir certidão do estado errado.`
-        : 'UF cadastral não identificada. A automação estadual do Ceará foi ignorada para não emitir certidão do estado errado.';
-      s.failures.push({ portal: portal.key, message });
-      emit(id, { type: 'portal_error', portal: portal.key, message });
-      emit(id, { type: 'portal_skipped', portal: portal.key, message });
-      continue;
-    }
-    try {
-      const result = await runPortal({ portal, cnpj: s.cnpj, browser: browserManager, baseDir: BASE, emit: e => emit(id, e) });
-      if (s.status === 'stopped') break;
-      if (!result?.filePath) throw new Error('Nenhum PDF foi capturado nesta etapa.');
-      const fileUrl = fileUrlForPath(result.filePath);
-
-      if (result.filePath) {
+      if (portal.key === 'estadual-ce' && uf !== 'CE') {
+        const message = uf ? `CNPJ cadastrado na UF ${uf}. A automação estadual do Ceará foi ignorada para não emitir certidão do estado errado.` : 'UF cadastral não identificada. A automação estadual do Ceará foi ignorada para não emitir certidão do estado errado.';
+        s.failures.push({ portal: portal.key, message });
+        emit(id, { type: 'portal_error', portal: portal.key, message });
+        emit(id, { type: 'portal_skipped', portal: portal.key, message });
+        continue;
+      }
+      try {
+        if (!s.browserManager) {
+          s.browserManager = new BrowserManager(e => emit(id, e));
+          if (sessionRegistry.activeId === id) browserManager = s.browserManager;
+        }
+        emit(id, { type: 'browser_starting', stage: 'browser_start', portal: portal.key, message: 'Iniciando navegador para o portal do órgão.' });
+        const result = await runPortal({ portal, cnpj: s.cnpj, browser: s.browserManager, baseDir: BASE, emit: e => emit(id, e) });
+        if (s.abortController.signal.aborted || s.status === 'stopped') break;
+        if (!result?.filePath) throw new Error('Nenhum PDF foi capturado nesta etapa.');
         try {
           const buffer = fs.readFileSync(result.filePath);
           const parsed = parseCert((await pdfParse(buffer)).text);
@@ -612,22 +700,35 @@ async function runSession(id) {
           emit(id, { type: 'portal_done', portal: portal.key, filePath: archived.filePath, fileUrl: archived.fileUrl });
           emit(id, { type: 'pdf_archived', portal: portal.key, ...archived });
           emit(id, { type: 'pdf_parsed', portal: portal.key, parsed, filePath: archived.filePath, fileUrl: archived.fileUrl, viewUrl: archived.viewUrl, downloadUrl: archived.downloadUrl, fileName: archived.fileName });
-        } catch (e) {
-          throw new Error('PDF capturado, mas não foi possível ler/arquivar: ' + e.message);
+        } catch (error) {
+          throw new Error('PDF capturado, mas não foi possível ler/arquivar: ' + error.message);
         }
+      } catch (error) {
+        if (s.abortController.signal.aborted || s.status === 'stopped') break;
+        s.failures.push({ portal: portal.key, message: error.message, code: error.code || '' });
+        emit(id, { type: 'portal_error', portal: portal.key, cause: error.code || error.name || 'ERROR', message: error.message });
+        emit(id, { type: 'portal_skipped', portal: portal.key, message: 'Certidão pendente nesta consulta. A Central seguirá para a próxima etapa.' });
       }
-    } catch (e) {
-      if (s.status === 'stopped') break;
-      s.failures.push({portal:portal.key, message:e.message});
-      emit(id, { type: 'portal_error', portal: portal.key, message: e.message });
-      emit(id, { type: 'portal_skipped', portal: portal.key, message: 'Certidão pendente nesta consulta. A Central seguirá para a próxima etapa.' });
-
     }
+  } catch (error) {
+    if (!s.abortController.signal.aborted && s.status !== 'stopped') {
+      s.status = 'error';
+      s.failures.push({ portal: s.currentPortal || '', stage: s.currentStage || '', message: error.message, code: error.code || '' });
+      emit(id, { type: 'error', stage: s.currentStage || '', cause: error.code || error.name || 'ERROR', message: error.message });
+    }
+  } finally {
+    if (s.status === 'running') s.status = s.failures.length ? 'partial' : 'done';
+    if (!s.completeEventSent) {
+      s.completeEventSent = true;
+      emit(id, { type: 'complete', status: s.status, failures: s.failures });
+    }
+    s.completedAt ||= new Date().toISOString();
+    s.currentPortal = null;
+    sessionRegistry.release(id);
+    const manager = s.browserManager;
+    if (browserManager === manager) browserManager = null;
+    await manager?.close().catch(error => console.warn(`[SESSION] close after completion: ${error.message}`));
   }
-  if (s.status !== 'stopped') s.status = s.failures.length ? 'partial' : 'done';
-  emit(id, { type: 'complete', status:s.status, failures:s.failures });
-  if (activeSessionId === id) activeSessionId = null;
-  s.currentPortal = null;
 }
 
 app.get('*', (_, res) => res.sendFile(path.join(BASE, 'public', 'central-certidoes.html')));
@@ -636,4 +737,8 @@ app.use((error,req,res,next)=>{
   if(res.headersSent)return next(error);
   res.status(error.status||500).json({error:error.status?error.message:'A Central encontrou uma falha ao falar com o portal. A API permaneceu ativa; consulte o log do servidor.'});
 });
-app.listen(PORT, '127.0.0.1', () => console.log(`Central de Certidões V2: http://127.0.0.1:${PORT}`));
+if (require.main === module) {
+  app.listen(PORT, '127.0.0.1', () => console.log(`Central de Certidões V2: http://127.0.0.1:${PORT}`));
+}
+
+module.exports = { app, sessions, sessionRegistry, municipalPortalResolver, cnpjCache };

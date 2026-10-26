@@ -64,9 +64,9 @@ function portalForCertificate(company, certificateKey) {
   return portalsForCompany(company).find(portal => (portal.key.startsWith('estadual-') ? 'ceara' : portal.key) === certificateKey) || null;
 }
 
-async function resolvePortalsForCompany(company,{municipalResolver}={}){
+async function resolvePortalsForCompany(company,{municipalResolver,signal,onProgress}={}){
   const known=municipalPortal(company);let municipalResolved=null,resolution={status:'PORTAL_EM_DESCOBERTA'};
-  if(municipalResolver){resolution=await municipalResolver.resolve(company);municipalResolved=discoveredMunicipalPortal(company,resolution);}
+  if(municipalResolver){resolution=await municipalResolver.resolve(company,{signal,onProgress});municipalResolved=discoveredMunicipalPortal(company,resolution);}
   if(!municipalResolved&&known){municipalResolved=known;resolution={...resolution,status:'PORTAL_ENCONTRADO',provider:'registry',certidao_url:known.url,fonte:'cadastro legado',confianca:'cadastro_legado'};}
   return {portals:[...basePortals.filter(portal=>!portal.key.startsWith('estadual-')),statePortal(company),municipalResolved].filter(Boolean),municipalResolution:resolution};
 }
