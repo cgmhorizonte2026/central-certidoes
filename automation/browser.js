@@ -138,28 +138,48 @@ class BrowserManager {
       for(const [selector,provider] of selectors){const loc=page.locator(selector),count=await loc.count().catch(()=>0);if(!count)continue;state.element_found=true;for(let i=0;i<count;i++){const item=loc.nth(i),visible=await item.isVisible().catch(()=>false),box=await item.boundingBox().catch(()=>null),hidden=await item.getAttribute('aria-hidden').catch(()=>null),passive=await item.evaluate(el=>!!el.closest('.grecaptcha-badge,[aria-hidden="true"]')).catch(()=>false);if(visible&&!!box&&box.width>8&&box.height>8&&hidden!=='true'&&!passive){state.element_visible=true;state.captcha_provider=provider;if(selector.startsWith('iframe'))state.iframe_visible=true;if(/input/.test(selector))state.user_input_visible=true;}}}
       const challenge=page.locator('[class*="challenge" i], [id*="challenge" i], [class*="captcha" i]');state.challenge_visible=await challenge.count().catch(()=>0)>0&&await challenge.first().isVisible().catch(()=>false);
       const message=page.getByText(/não sou um robô|nao sou um robo|verifique que você é humano|verifique que voce e humano|verify you are human|captcha/i).first();state.blocking_message_visible=await message.isVisible().catch(()=>false);
-      state.captcha_active=state.element_visible||state.iframe_visible||state.user_input_visible||(state.challenge_visible&&state.blocking_message_visible);state.blocking=state.captcha_active&&(state.blocking_message_visible||state.challenge_visible||state.user_input_visible||state.iframe_visible);state.detection_reason=state.captcha_active?(state.blocking?'controle/desafio visível bloqueando a emissão':'controle CAPTCHA visível, sem evidência de bloqueio'):state.element_found?'componente CAPTCHA presente apenas no DOM, sem interação visível':'';if(state.element_found||state.blocking_message_visible)this.emit({type:'captcha_detection',...state});return state;
+      const completion=await this.captchaCompletionEvidence(page);
+      state.detected=state.element_found||state.blocking_message_visible;
+      state.solved=completion.solved;
+      state.completionEvidence=completion.evidence;
+      // O widget do reCAPTCHA continua visível depois do aceite. Sua presença
+      // não significa que o desafio ainda bloqueia o envio: a caixa marcada
+      // ou o token de resposta preenchido comprovam a validação humana.
+      state.captcha_active=!state.solved&&(state.element_visible||state.iframe_visible||state.user_input_visible||(state.challenge_visible&&state.blocking_message_visible));
+      state.blocking=state.captcha_active&&(state.blocking_message_visible||state.challenge_visible||state.user_input_visible||state.iframe_visible);
+      state.detection_reason=state.solved?'verificação concluída; widget ainda pode permanecer visível':state.captcha_active?(state.blocking?'controle/desafio visível bloqueando a emissão':'controle CAPTCHA visível, sem evidência de bloqueio'):state.element_found?'componente CAPTCHA presente apenas no DOM, sem interação visível':'';
+      if(state.element_found||state.blocking_message_visible)this.emit({type:'captcha_detection',...state});return state;
     } catch (_) { return state; }
   }
   async captchaPresent(page) { return (await this.captchaState(page)).captcha_active; }
 
+  async captchaCompletionEvidence(page) {
+    const evidence=[];
+    for(const frame of page.frames()) {
+      try {
+        for(const selector of [
+          'textarea[name="g-recaptcha-response"]','textarea#g-recaptcha-response',
+          'textarea[name="h-captcha-response"]','textarea[name="cf-turnstile-response"]',
+          'input[name="cf-turnstile-response"]'
+        ]) {
+          const fields=frame.locator(selector),count=await fields.count().catch(()=>0);
+          for(let i=0;i<count;i++) {
+            const value=await fields.nth(i).inputValue().catch(async()=>await fields.nth(i).getAttribute('value').catch(()=>''));
+            if(String(value||'').trim()) evidence.push(`${selector}:token-presente`);
+          }
+        }
+        for(const selector of ['#recaptcha-anchor[aria-checked="true"]','[role="checkbox"][aria-checked="true"]','.recaptcha-checkbox-checked']) {
+          const checks=frame.locator(selector),count=await checks.count().catch(()=>0);
+          for(let i=0;i<count;i++) if(await checks.nth(i).isVisible().catch(()=>true)) evidence.push(`${selector}:validado`);
+        }
+      } catch (_) {}
+    }
+    return {solved:evidence.length>0,evidence:[...new Set(evidence)]};
+  }
+
   async captchaSolved(page) {
     try {
-      for (const frame of page.frames()) {
-        try {
-          const checks = [
-            frame.locator('#recaptcha-anchor'),
-            frame.locator('[role="checkbox"][aria-checked="true"]'),
-            frame.locator('.recaptcha-checkbox-checked')
-          ];
-          for (const loc of checks) {
-            if (await loc.count()) {
-              const checked = await loc.getAttribute('aria-checked').catch(() => null);
-              if (checked === 'true' || await loc.evaluate(el => el.classList.contains('recaptcha-checkbox-checked')).catch(() => false)) return true;
-            }
-          }
-        } catch (_) {}
-      }
+      if((await this.captchaCompletionEvidence(page)).solved) return true;
       return !(await this.captchaPresent(page));
     } catch (_) { return false; }
   }
@@ -197,9 +217,10 @@ class BrowserManager {
         this.emit({ type:'human_action_required', status:'AGUARDANDO_INTERACAO_USUARIO', message:resumeMessage });
         await manualPromise;
         const recheck = await this.captchaState(page);
-        this.emit({ type:'CAPTCHA_RECHECK', ...recheck, message:'Reavaliação após o usuário clicar em Continuar.' });
+        const completion=await this.captchaCompletionEvidence(page);
+        this.emit({ type:'CAPTCHA_RECHECK', ...recheck, solved:completion.solved, completionEvidence:completion.evidence, message:'Reavaliação após o usuário clicar em Continuar.' });
         this.resumeResolver = null;
-        if (recheck.captcha_active && recheck.blocking) return false;
+        if (recheck.captcha_active && recheck.blocking && !completion.solved) return false;
         this.emit({ type:'manual_resume' });
         return true;
       }

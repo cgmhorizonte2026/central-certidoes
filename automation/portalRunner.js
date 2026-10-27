@@ -196,10 +196,11 @@ async function ensureCaptchaClearBeforeSubmit({ page, browser, emit, portal, sta
   if (!(state.captcha_active && state.blocking)) return { page: current, allowed: true };
   emit({ type: 'submit_blocked_by_captcha', portal: portal.key, stage, submitAttempted: false,
     submitBlockedByCaptcha: true, captcha: state });
-  await browser.waitForCaptcha(current, 'Conclua a verificação humana na janela do órgão. Depois clique em Continuar na Central para retomar a consulta.', 600000, true, true);
+  const resumed = await browser.waitForCaptcha(current, 'Conclua a verificação humana na janela do órgão. Depois clique em Continuar na Central para retomar a consulta.', 600000, true, true);
   emit({ type: 'captcha_after_user_interaction', portal: portal.key, stage });
   const after = await browser.captchaState(current).catch(() => ({ captcha_active:false, blocking:false }));
-  if (after.captcha_active && after.blocking) return { page: current, allowed: false, captcha: after };
+  const solved = after.solved || await Promise.resolve(browser.captchaSolved ? browser.captchaSolved(current) : false).catch(() => false);
+  if ((!resumed || after.captcha_active && after.blocking) && !solved) return { page: current, allowed: false, captcha: after };
   return { page: current, allowed: true, captcha: after };
 }
 
@@ -683,13 +684,19 @@ async function runPortal({ portal, cnpj, browser, baseDir, emit }) {
       const captchaState = await browser.captchaState(page).catch(() => ({captcha_active:false,blocking:false}));
       federalCaptchaWasBlocking = !!(captchaState.captcha_active && captchaState.blocking);
     }
-    await browser.waitForCaptcha(
+    const captchaReady = await browser.waitForCaptcha(
       page,
       `Resolva o CAPTCHA na janela do portal ${portal.name}. Depois clique em Continuar na Central para retomar.`,
       portal.captchaTimeout || 300000,
       false,
       true
     );
+    if (!captchaReady) {
+      const state = await browser.captchaState(page).catch(() => ({ captcha_active:true, blocking:true }));
+      if (state.captcha_active && state.blocking && !state.solved) {
+        throw new Error('AGUARDANDO_INTERACAO_USUARIO: o CAPTCHA continua ativo depois de Continuar. Resolva-o na mesma aba e tente novamente.');
+      }
+    }
   }
 
   for (const action of ((download || pdfBuffer) ? [] : (portal.afterCaptchaActions || []))) {
