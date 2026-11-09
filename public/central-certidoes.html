@@ -468,6 +468,8 @@ header.top{border:0!important;padding:0 0 18px!important;margin-bottom:14px!impo
     <h2 style="margin:0 0 8px">Anexar após validação oficial</h2>
     <p id="manualAttachOrg" style="color:#475569"></p>
     <p style="font-size:13px;color:#475569">Informe o código de verificação impresso no documento. Antes de anexar, abra o portal oficial e confira o código. A Central verifica se o CNPJ e o código aparecem no PDF e registra quem confirmou a validação.</p>
+    <label for="manualAttachPdf">Arquivo PDF da certidão</label>
+    <input id="manualAttachPdf" type="file" accept="application/pdf,.pdf" style="display:block;margin:6px 0 14px">
     <label for="manualAttachCode">Código de verificação</label>
     <input id="manualAttachCode" required minlength="4" maxlength="80" style="display:block;width:100%;padding:10px;margin:6px 0 14px">
     <label style="display:flex;gap:8px;align-items:flex-start;font-size:13px;margin:12px 0"><input id="manualAttachConfirmed" type="checkbox" required> Confirmei a autenticidade deste código no portal oficial do órgão.</label>
@@ -737,30 +739,41 @@ function showArchivedPdf(org, pdfUrl, pdfNome=''){
   }
 }
 
-let pendingManualFile=null,pendingManualOrg=null;
+let pendingManualFile=null,pendingManualOrg=null,pendingManualSessionId=null;
+function promptSessionMunicipalUpload(id){
+ const org=ORGAOS.find(item=>item.key==='municipal');if(!org)return;
+ pendingManualSessionId=id;pendingManualOrg=org;pendingManualFile=null;
+ document.getElementById('manualAttachOrg').textContent=`Certidão Municipal · ${document.getElementById('razaoSocial').value||maskCnpj(cnpjDigits())}`;
+ document.getElementById('manualAttachFileName').textContent='Selecione o PDF baixado do portal municipal.';
+ document.getElementById('manualAttachPdf').value='';document.getElementById('manualAttachCode').value='';document.getElementById('manualAttachConfirmed').checked=false;
+ document.getElementById('manualAttachDialog').showModal();
+}
+document.getElementById('manualAttachPdf').addEventListener('change',event=>{pendingManualFile=event.target.files?.[0]||null;document.getElementById('manualAttachFileName').textContent=pendingManualFile?`Arquivo selecionado: ${pendingManualFile.name}`:'Selecione o PDF baixado do portal municipal.';});
 async function handleFile(e, org){
  const file=e.target.files[0];if(!file)return;
  if(cnpjDigits().length!==14){alert('Informe o CNPJ completo antes de anexar.');e.target.value='';return;}
- pendingManualFile=file;pendingManualOrg=org;
+ pendingManualFile=file;pendingManualOrg=org;pendingManualSessionId=null;
  document.getElementById('manualAttachOrg').textContent=`${org.title} · ${document.getElementById('razaoSocial').value||maskCnpj(cnpjDigits())}`;
  document.getElementById('manualAttachFileName').textContent=`Arquivo selecionado: ${file.name}`;
  document.getElementById('manualAttachCode').value='';document.getElementById('manualAttachConfirmed').checked=false;
  document.getElementById('manualAttachDialog').showModal();document.getElementById('manualAttachCode').focus();
 }
-document.getElementById('manualAttachCancel').onclick=()=>{document.getElementById('manualAttachDialog').close();pendingManualFile=null;pendingManualOrg=null;};
+document.getElementById('manualAttachCancel').onclick=()=>{document.getElementById('manualAttachDialog').close();pendingManualFile=null;pendingManualOrg=null;pendingManualSessionId=null;document.getElementById('manualAttachPdf').value='';};
 document.getElementById('manualAttachForm').addEventListener('submit',async event=>{
- event.preventDefault();const file=pendingManualFile,org=pendingManualOrg,cnpj=cnpjDigits();if(!file||!org)return;
+ event.preventDefault();const file=pendingManualFile,org=pendingManualOrg,cnpj=cnpjDigits(),sessionUploadId=pendingManualSessionId;if(!file||!org){alert('Selecione o PDF da certidão antes de continuar.');return;}
  const submit=document.getElementById('manualAttachSubmit'),code=document.getElementById('manualAttachCode').value.trim(),dz=document.getElementById('drop-'+org.key);
  submit.disabled=true;submit.textContent='Conferindo PDF…';
  try{
-  const r=await fetch('/api/manual/'+cnpj+'/'+org.key,{method:'POST',headers:{'Content-Type':'application/pdf','X-Certificate-Code':code,'X-Official-Validation':'confirmed'},body:file});
+  const url=sessionUploadId?`/api/session/${encodeURIComponent(sessionUploadId)}/municipal-pdf`:'/api/manual/'+cnpj+'/'+org.key;
+  const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/pdf','X-Certificate-Code':code,'X-Official-Validation':'confirmed'},body:file});
   let cert={};try{cert=await r.json();}catch{}if(!r.ok)throw Error(cert.error||`Falha ao validar (HTTP ${r.status}).`);
+  if(sessionUploadId){document.getElementById('manualAttachDialog').close();registrarMovimentacao({type:'manual_certificate_validated',message:'PDF municipal recebido na consulta após conferência do código no portal oficial.'},{cnpj,portal:'municipal'});document.getElementById('manualAttachFileName').textContent=cert.message||'PDF recebido. A Central está arquivando a certidão.';return;}
   if(cnpjDigits()!==cnpj)return;
   state[org.key]={...cert,org,pdfUrl:cert.fileUrl,pdfNome:cert.fileName,verificado:true,validation:cert.validation};
   document.getElementById('sel-'+org.key).value=cert.status||'';document.getElementById('date-'+org.key).value=cert.validade||'';document.getElementById('numero-'+org.key).value=cert.numero||'';document.getElementById('check-'+org.key).checked=true;
-  showArchivedPdf(org,cert.fileUrl,cert.fileName);document.getElementById('manualAttachDialog').close();await salvarNoHistorico();renderConsolidado();window.renderDreamDashboard?.();registrarMovimentacao({type:'manual_certificate_validated',message:`PDF anexado após conferência do código no portal oficial: ${code}`},{cnpj,portal:org.key});
+  showArchivedPdf(org,cert.fileUrl,cert.fileName);document.getElementById('manualAttachDialog').close();await salvarNoHistorico();renderConsolidado();window.renderDreamDashboard?.();registrarMovimentacao({type:'manual_certificate_validated',message:'PDF anexado após conferência do código no portal oficial.'},{cnpj,portal:org.key});
  }catch(error){alert(error.message);dz.textContent='Documento não anexado: '+error.message;}
- finally{submit.disabled=false;submit.textContent='Conferir código e anexar PDF';document.getElementById('file-'+org.key).value='';pendingManualFile=null;pendingManualOrg=null;}
+ finally{submit.disabled=false;submit.textContent='Conferir código e anexar PDF';document.getElementById('file-'+org.key)?.value&&(document.getElementById('file-'+org.key).value='');document.getElementById('manualAttachPdf').value='';pendingManualFile=null;pendingManualOrg=null;pendingManualSessionId=null;}
 });
 
 function parseCertidao(rawText){
@@ -1161,7 +1174,7 @@ atualizarImpressao();
     <button class="v2-btn" id="btnConsultarTodas">🤖 Consultar todas as CNDs</button>
     <button class="v2-btn secondary" id="btnContinuar" disabled>✓ Continuar manualmente</button>
     <button class="v2-btn secondary" id="btnAbrirInteracao" disabled>↗ Abrir janela do órgão</button>
-    <button class="v2-btn danger" id="btnParar" disabled>■ Parar</button>
+    <button class="v2-btn danger" id="btnParar">■ Parar</button>
   </div>
   <div id="v2Human" class="v2-alert v2-hidden"><b>⚠️ Ação necessária</b><br><span id="v2HumanMsg">Resolva o CAPTCHA na janela do navegador. A Central continuará automaticamente; o botão manual é apenas uma alternativa se a detecção automática falhar.</span></div>
   <div class="v2-progress"><div id="v2ProgressBar"></div></div>
@@ -1181,7 +1194,7 @@ window.addEventListener('DOMContentLoaded',()=>{
 <script id="v2-client">
 (() => {
   const $ = id => document.getElementById(id);
-  let sessionId = null, poll = null;
+  let sessionId = null, poll = null, sessionManualUploadRequired = false, startRequestPending = false, stopRequested = false;
   const steps = {};
   const processedPdfUrls = new Set();
   const processedEventKeys = new Set();
@@ -1205,14 +1218,15 @@ window.addEventListener('DOMContentLoaded',()=>{
   };
   async function startConsultation(certificateKey=''){
     const cnpj=digits($('cnpj')?.value); if(cnpj.length!==14){alert('Informe um CNPJ válido com 14 dígitos.');return;}
+    startRequestPending=true; stopRequested=false;
     $('btnConsultarTodas').disabled=true; $('btnParar').disabled=false; $('btnContinuar').disabled=true; $('v2Human').classList.add('v2-hidden'); $('v2Log').textContent='';
-    try{ const data=await api('/api/session',{method:'POST',body:JSON.stringify({cnpj,razaoSocial:$('razaoSocial')?.value||'',certificateKey})}); sessionId=data.sessionId; renderSteps(data.portals); log((certificateKey?'Consulta individual':'Consulta completa')+' iniciada: '+sessionId); poll=setInterval(refresh,800); refresh(); }catch(e){alert(e.message); $('btnConsultarTodas').disabled=false; $('btnParar').disabled=true;}
+    try{ const data=await api('/api/session',{method:'POST',body:JSON.stringify({cnpj,razaoSocial:$('razaoSocial')?.value||'',certificateKey})}); sessionId=data.sessionId; startRequestPending=false; renderSteps(data.portals); log((certificateKey?'Consulta individual':'Consulta completa')+' iniciada: '+sessionId); poll=setInterval(refresh,800); if(stopRequested){await api(`/api/session/${sessionId}/stop`,{method:'POST'});log('Consulta interrompida conforme solicitado durante a inicialização.');stopRequested=false;} refresh(); }catch(e){startRequestPending=false;alert(e.message); $('btnConsultarTodas').disabled=false; $('btnParar').disabled=false; recoverActiveSession();}
   }
   $('btnConsultarTodas').onclick=()=>startConsultation();
   window.startSingleCertificate=startConsultation;
-  $('btnContinuar').onclick=async()=>{ if(!sessionId)return; $('btnContinuar').disabled=true; try{await api(`/api/session/${sessionId}/resume`,{method:'POST'});$('v2Human').classList.add('v2-hidden');log('Usuário autorizou a retomada da automação.');}catch(error){$('btnContinuar').disabled=false;log(error.message);alert(error.message);} };
+  $('btnContinuar').onclick=async()=>{ if(!sessionId)return; if(sessionManualUploadRequired){promptSessionMunicipalUpload(sessionId);return;} $('btnContinuar').disabled=true; try{await api(`/api/session/${sessionId}/resume`,{method:'POST'});$('v2Human').classList.add('v2-hidden');log('Usuário autorizou a retomada da automação.');}catch(error){$('btnContinuar').disabled=false;log(error.message);alert(error.message);} };
   $('btnAbrirInteracao').onclick=async()=>{ if(!sessionId)return; const btn=$('btnAbrirInteracao');btn.disabled=true;try{const result=await api(`/api/session/${sessionId}/focus`,{method:'POST'});log(`Janela do órgão trazida para a frente${result.url?' — '+result.url:''}.`);}catch(error){log(error.message);alert(error.message);}finally{btn.disabled=!$('btnContinuar')||$('btnContinuar').disabled;} };
-  $('btnParar').onclick=async()=>{ if(!sessionId)return; $('btnParar').disabled=true;try{await api(`/api/session/${sessionId}/stop`,{method:'POST'});log('Sessão interrompida pelo usuário.');}catch(error){$('btnParar').disabled=false;log(error.message);alert(error.message);} };
+  $('btnParar').onclick=async()=>{ $('btnParar').disabled=false;if(!sessionId&&startRequestPending){stopRequested=true;log('Cancelamento solicitado; a Central interromperá a consulta assim que o servidor confirmar a sessão.');return;}try{const result=sessionId?await api(`/api/session/${sessionId}/stop`,{method:'POST'}):await api('/api/session/active/stop',{method:'POST'});if(result.stopped===false){log(result.message||'Não há consulta ativa para interromper.');return;}log('Sessão interrompida pelo usuário.');$('btnConsultarTodas').disabled=false;if(sessionId)refresh();}catch(error){log(error.message);alert(error.message);}finally{$('btnParar').disabled=false;} };
   async function processAutoPdf(e){
     if(!e.portal || !e.fileUrl) return;
     const org = ORGAOS.find(o=>o.key===e.portal);
@@ -1252,7 +1266,7 @@ window.addEventListener('DOMContentLoaded',()=>{
       const failed=s.events.filter(e=>e.type==='portal_skipped').length;
       const total=Math.max(1,(s.portals||[]).length);
       $('v2ProgressBar').style.width=Math.round((done+failed)/total*100)+'%';
-      const progressTypes=['company_lookup_started','company_lookup_completed','municipal_discovery_started','municipal_discovery_progress','municipal_resolution','browser_starting','browser_started','portal_start','human_action_required','error','portal_error','complete','stopped'];
+      const progressTypes=['company_lookup_started','company_lookup_completed','municipal_discovery_started','municipal_discovery_progress','municipal_resolution','browser_starting','browser_started','portal_start','federal_flow_started','federal_loading_wait','federal_flow_progress','federal_cnpj_consulted','federal_parameter_submitted','federal_latest_certificate_selected','federal_captcha_wait','municipal_manual_issuance','human_action_required','error','portal_error','complete','stopped'];
       const progress=s.events.slice().reverse().find(e=>progressTypes.includes(e.type));
       const failureMessages=s.events.filter(e=>e.type==='portal_error').map(e=>`${e.portal||'Portal'}: ${e.message||'falha sem detalhes'}`);
       const reused=s.events.filter(e=>e.type==='portal_reused').length;
@@ -1262,11 +1276,13 @@ window.addEventListener('DOMContentLoaded',()=>{
       $('v2ProgressText').textContent=terminalMessage;
       const last=s.events.slice(-12);
       $('v2Log').textContent=last.map(e=>`${e.time.slice(11,19)} — ${e.message||e.type}${e.portal?' — '+e.portal:''}`).join('\n');
-      const boundary=s.events.findLastIndex(e=>['portal_start','portal_done','portal_skipped','captcha_solved','manual_resume','resumed','complete','stopped'].includes(e.type));
+      const boundary=s.events.findLastIndex(e=>['portal_start','portal_done','portal_skipped','captcha_solved','manual_resume','resumed','municipal_pdf_captured','downloaded','complete','stopped'].includes(e.type));
       const human=s.events.slice(boundary+1).find(e=>e.type==='human_action_required');
       $('v2Human').classList.toggle('v2-hidden',!human);
       $('btnContinuar').disabled=!human;
       $('btnAbrirInteracao').disabled=!human;
+      sessionManualUploadRequired=!!human?.manualUploadRequired;
+      $('btnContinuar').textContent=sessionManualUploadRequired?'📎 Anexar PDF municipal':human?.manualDownloadRequired?'✓ Verificar PDF / Continuar':'✓ Continuar manualmente';
       if(human) $('v2HumanMsg').textContent=human.message;
       s.events.forEach(e=>{
         const eventKey=(e.time||'')+'|'+(e.type||'')+'|'+(e.portal||'')+'|'+(e.message||'');
@@ -1274,7 +1290,8 @@ window.addEventListener('DOMContentLoaded',()=>{
         if(e.portal){
           const uiKey=String(e.portal).startsWith('estadual-')?'ceara':e.portal;
           if(e.type==='portal_start')step(uiKey,'Consultando');
-          if(e.type==='human_action_required')step(uiKey,'CAPTCHA / ação humana');
+          if(e.type==='human_action_required')step(uiKey,e.manualUploadRequired?'Aguardando PDF e código de autenticação':e.manualDownloadRequired?'Aguardando emissão manual e PDF':'CAPTCHA / ação humana');
+          if(e.type==='municipal_manual_issuance')step(uiKey,'Aguardando emissão manual e download do PDF');
           if(e.type==='captcha_solved')step(uiKey,'CAPTCHA concluído — continuando');
           if(e.type==='after_captcha_action')step(uiKey,e.clicked?'Prosseguindo automaticamente':'Procurando próxima etapa');
           if(e.type==='portal_reused')step(uiKey,'✓ Já válida no arquivo');
@@ -1292,10 +1309,11 @@ window.addEventListener('DOMContentLoaded',()=>{
                 ...prev,
                 source: e.source || prev.source || '',
                 archivedAt: e.archivedAt || prev.archivedAt || '',
+                validation: e.validation || prev.validation || null,
                 status: parsed.status || prev.status || '',
                 validade: parsed.validade || prev.validade || '',
                 numero: parsed.numero || prev.numero || '',
-                verificado: prev.verificado || false,
+                verificado: prev.verificado || e.source==='manual_validated_by_operator',
                 municipio,
                 org,
                 pdfUrl: e.fileUrl,
@@ -1320,10 +1338,26 @@ window.addEventListener('DOMContentLoaded',()=>{
       if(['done','partial','error','stopped'].includes(s.status)){
         clearInterval(poll);
         $('btnConsultarTodas').disabled=false;
-        $('btnParar').disabled=true;
+        $('btnParar').disabled=false;
       }
     }catch(e){console.error(e)}
   }
+  async function recoverActiveSession(){
+    try{
+      const active=await api('/api/session/active');
+      if(!active.active)return;
+      sessionId=active.sessionId;
+      if(active.cnpj)$('cnpj').value=active.cnpj;
+      if(active.razaoSocial)$('razaoSocial').value=active.razaoSocial;
+      $('btnConsultarTodas').disabled=true;
+      $('btnParar').disabled=false;
+      renderSteps(active.portals||[]);
+      log(`Consulta ativa recuperada (${sessionId}). Você pode acompanhar ou interromper.`);
+      if(!poll)poll=setInterval(refresh,800);
+      refresh();
+    }catch(error){console.warn('Não foi possível recuperar a consulta ativa:',error);}
+  }
+  recoverActiveSession();
 })();
 </script>
 
@@ -1412,7 +1446,7 @@ body{overflow-x:hidden}
     const start=document.getElementById('dashStart'); const resume=document.getElementById('dashResume'); const stop=document.getElementById('dashStop');
     if(start&&legacyStart) start.disabled=legacyStart.disabled;
     if(resume&&legacyResume) resume.disabled=legacyResume.disabled;
-    if(stop&&legacyStop) stop.disabled=legacyStop.disabled;
+    if(stop&&legacyStop) stop.disabled=false;
     const txt=document.getElementById('v2ProgressText')?.textContent?.trim()||'Pronto para iniciar.';
     const runText=document.getElementById('dashRunText'); if(runText) runText.textContent=txt;
     const oldFill=document.getElementById('v2ProgressBar'); const fill=document.getElementById('dashRunFill');

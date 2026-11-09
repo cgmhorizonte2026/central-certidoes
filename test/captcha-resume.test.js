@@ -67,10 +67,11 @@ test('SpeedGov adapter keeps the real Pacajus Consultar control as its post-CAPT
   assert.equal(adapter.afterCaptchaActions[0].name, 'Consultar certidão');
 });
 
-test('Pacajus SpeedGov flow submits Consultar in the same session after CAPTCHA and Continue', async () => {
+test('municipal issuance waits for the user and archives the official PDF downloaded in the managed browser', async () => {
   const browser = await chromium.launch({ headless: true });
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'central-pacajus-captcha-'));
   const events = [];
+  let manager;
   try {
     const context = await browser.newContext({ acceptDownloads: true });
     const pdfPage = await context.newPage();
@@ -82,20 +83,16 @@ test('Pacajus SpeedGov flow submits Consultar in the same session after CAPTCHA 
         return route.fulfill({ status: 200, contentType: 'application/pdf', body: pdf });
       }
       return route.fulfill({ contentType: 'text/html; charset=utf-8', body: `
-        <h1>Certidão Negativa de Tributos Municipais</h1>
-        <form id="emissao" onsubmit="event.preventDefault(); window.open('/certidao.pdf', '_blank')">
-          <label for="cnpj">CPF ou CNPJ (Somente números)</label><input id="cnpj" value="">
-          <div class="g-recaptcha"><iframe title="reCAPTCHA" srcdoc="<div id='recaptcha-anchor' role='checkbox' aria-checked='false' style='width:30px;height:30px'></div>"></iframe>
-            <span>Não sou um robô</span><textarea name="g-recaptcha-response" hidden></textarea></div>
-          <input type="submit" name="commit" value="Consultar" class="btn btn-lime" id="gerar_certidao">
-        </form>` });
+        <h1>Portal Oficial de Certidões Municipais</h1>
+        <a href="/certidao.pdf">Abrir certidão</a>` });
     });
-    const manager = new BrowserManager(event => events.push(event));
+    manager = new BrowserManager(event => events.push(event));
     manager.browser = browser;
     manager.context = context;
     const portal = {
-      ...speedGovAdapter({ key: 'municipal', name: 'Municipal · Pacajus', shortName: 'Municipal', url: 'https://pacajus.test/form' }, { cnpj: ['#cnpj'] }),
+      ...speedGovAdapter({ key: 'municipal', name: 'Municipal · Pacajus', shortName: 'Municipal', url: 'https://pacajus.test/form', allowedHosts: ['pacajus.test'] }, { cnpj: ['#cnpj'] }),
       key: 'municipal', name: 'Municipal · Pacajus', shortName: 'Municipal', url: 'https://pacajus.test/form',
+      allowedHosts: ['pacajus.test'],
       selectors: { cnpj: ['#cnpj'] }, preActions: [], beforeCaptchaActions: [],
       afterCaptchaActions: [{ name: 'Consultar certidão', selectors: ['#gerar_certidao'], captureDownload: true, downloadTimeout: 10000, waitMs: 100 }]
     };
@@ -106,22 +103,24 @@ test('Pacajus SpeedGov flow submits Consultar in the same session after CAPTCHA 
         if (predicate()) return;
         await new Promise(resolve => setTimeout(resolve, 20));
       }
-      throw new Error('Timeout aguardando etapa do fluxo municipal.');
+      throw new Error('Timeout aguardando a Central solicitar a emissão manual municipal.');
     };
     await waitUntil(() => events.some(event => event.type === 'human_action_required'));
     const page = manager.page;
-    const captchaFrame = page.frames().find(frame => frame.parentFrame());
-    await captchaFrame.locator('#recaptcha-anchor').evaluate(element => element.setAttribute('aria-checked', 'true'));
-    await page.locator('textarea[name="g-recaptcha-response"]').evaluate(element => { element.value = 'valid-human-token'; });
-    await waitUntil(() => events.some(event => event.type === 'waiting_for_central_resume'));
-    manager.resume(); // equivale ao botão Continuar na Central
+    assert.ok(events.some(event => event.type === 'municipal_manual_issuance'));
+    assert.equal(await page.locator('#cnpj').count(), 0, 'a Central deixa a conclusão da emissão ao usuário');
+    assert.equal(events.some(event => event.type === 'form_submit_attempt'), false);
+    manager.resume();
+    await waitUntil(() => events.filter(event => event.type === 'human_action_required' && event.manualDownloadRequired).length >= 2);
+    await page.getByRole('link', { name: 'Abrir certidão' }).click({ timeout: 5000 });
 
-    const result = await running;
+    const result = await Promise.race([running, new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout aguardando a captura manual do PDF.')), 8000))]);
     assert.ok(result.filePath && fs.existsSync(result.filePath));
     assert.equal(fs.readFileSync(result.filePath).subarray(0, 5).toString(), '%PDF-');
-    assert.ok(events.some(event => event.type === 'after_captcha_action' && event.action === 'Consultar certidão' && event.clicked));
-    assert.ok(events.some(event => event.type === 'CAPTCHA_RECHECK' && event.solved && !event.blocking));
+    assert.ok(result.captureStage.startsWith('municipal-manual-official-'));
+    assert.ok(events.some(event => event.type === 'downloaded' && event.portal === 'municipal'));
   } finally {
+    await manager?.close().catch(() => {});
     await browser.close().catch(() => {});
     fs.rmSync(root, { recursive: true, force: true });
   }

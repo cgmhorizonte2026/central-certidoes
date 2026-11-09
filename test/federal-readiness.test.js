@@ -2,15 +2,15 @@ const test=require('node:test'),assert=require('node:assert/strict');
 const {launchBrowser}=require('../automation/launch');
 const {waitForFederalForm}=require('../automation/federal-readiness');
 const {PortalSessions}=require('../automation/sessions');
-test('federal preparation waits for the form without accepting cookies before issuance',async()=>{
+test('federal preparation waits for the PJ CNPJ form and consultation action without accepting cookies',async()=>{
  const browser=await launchBrowser(true);
  try{
-  const page=await browser.newPage();await page.route('https://servicos.receitafederal.gov.br/**',r=>r.fulfill({contentType:'text/html; charset=utf-8',body:`<input name="niContribuinte"><button onclick="window.issued=true">Emitir Certidão</button><script>setTimeout(()=>{const c=document.createElement('div');c.id='card0';c.innerHTML='utilizamos cookies <button onclick="window.accepted=true;this.parentElement.remove()">Aceitar</button>';document.body.append(c)},300)</script>`}));
+  const page=await browser.newPage();await page.route('https://servicos.receitafederal.gov.br/**',r=>r.fulfill({contentType:'text/html; charset=utf-8',body:`<input name="niContribuinte"><button onclick="window.consulted=true">Consultar Certidão</button><script>setTimeout(()=>{const c=document.createElement('div');c.id='card0';c.innerHTML='utilizamos cookies <button onclick="window.accepted=true;this.parentElement.remove()">Aceitar</button>';document.body.append(c)},300)</script>`}));
   await page.goto('https://servicos.receitafederal.gov.br/form');const job={page,status:'opening',portal:{key:'federal'}};
   const events=[];assert.equal(await waitForFederalForm(job,e=>events.push(e),{minimum:1000,quiet:400,deadline:5000}),true);
   assert.equal(await page.evaluate(()=>Boolean(window.accepted)),false);assert.equal(await page.evaluate(()=>Boolean(window.issued)),false);
   assert.equal(events.at(-1).type,'federal_form_ready');
-  await page.getByRole('button',{name:'Emitir Certidão'}).evaluate(e=>{e.disabled=true;});
+  await page.getByRole('button',{name:'Consultar Certidão'}).evaluate(e=>{e.disabled=true;});
   assert.equal(await waitForFederalForm(job,()=>{},{minimum:0,quiet:0,deadline:500}),false);
  }finally{await browser.close();}
 });

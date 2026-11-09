@@ -90,3 +90,30 @@ test('resolver exception becomes a visible error and releases the next session',
   assert.ok(session.events.some(event => event.type === 'portal_error' && /Erro técnico/.test(event.message)));
   assert.equal(sessionRegistry.activeId, null);
 });
+
+test('active session can be recovered and stopped without the original browser session id', async () => {
+  let markResolverStarted;
+  const resolverStarted = new Promise(resolve => { markResolverStarted = resolve; });
+  municipalPortalResolver.resolve = async (_company, { signal }) => new Promise((resolve, reject) => {
+    markResolverStarted();
+    signal.addEventListener('abort', () => reject(signal.reason || new Error('cancelled')), { once: true });
+  });
+
+  const started = await startMunicipal();
+  await resolverStarted;
+  const activeResponse = await fetch(`${baseUrl}/api/session/active`);
+  assert.equal(activeResponse.status, 200);
+  const active = await activeResponse.json();
+  assert.equal(active.active, true);
+  assert.equal(active.sessionId, started.body.sessionId);
+  assert.equal(active.cnpj, cnpj);
+
+  const stopResponse = await fetch(`${baseUrl}/api/session/active/stop`, { method: 'POST' });
+  assert.equal(stopResponse.status, 200);
+  assert.equal((await stopResponse.json()).stopped, true);
+  assert.equal(sessionRegistry.activeId, null);
+
+  const idleStop = await fetch(`${baseUrl}/api/session/active/stop`, { method: 'POST' });
+  assert.equal(idleStop.status, 200);
+  assert.equal((await idleStop.json()).stopped, false);
+});

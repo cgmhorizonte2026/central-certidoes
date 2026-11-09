@@ -3,6 +3,7 @@ const { trustedUrl } = require('../config/registry');
 const {isoDate,today}=require('../lib/domain');
 const {federalSecurityError}=require('./federal-support');
 const {handleFederalCookies}=require('./federal-cookies');
+const {existingFederalCertificate}=require('./federal-existing');
 const {navigateMunicipal}=require('./municipal-navigation');
 const runtime = new WeakMap();
 const terminal = job => ['finished','cancelled','error','capturing'].includes(job.status);
@@ -76,6 +77,191 @@ async function prepare(frame,job) {
   }
   return fillFirst(frame,[`${editable}[name="niContribuinte"]`,`${editable}[name="NI"]`,`${editable}[id*="txtInscricao" i]`,`${editable}[name*="cnpj" i]`,`${editable}[id*="cnpj" i]`,`${editable}[placeholder*="CNPJ" i]`,`${editable}[name="documento"]`],job.cnpj);
 }
+
+const federalCnpjField = `${editable}[name="niContribuinte"],${editable}[name="cnpj" i],${editable}[id*="cnpj" i],${editable}[placeholder*="CNPJ" i]`;
+const federalParameterXPath = 'xpath=/html/body/app-root/mf-portal-layout/portal-main-layout/div/main/ng-component/ng-component/ng-component/app-informar-parametro-pj/app-informar-parametro/form/div[2]/button';
+async function clickUsable(locator, timeout=4500) {
+  if(!locator)return false;
+  if (!await visible(locator) || !await locator.isEnabled().catch(()=>false)) return false;
+  await locator.click({timeout});
+  return true;
+}
+async function federalRoleButton(frame, names, {excludeModal=false}={}) {
+  for (const name of names) {
+    const items=frame.getByRole('button',{name});
+    for(let i=0;i<await items.count();i++){
+      const item=items.nth(i);if(!await visible(item)||!await item.isEnabled().catch(()=>false))continue;
+      if(excludeModal&&await item.locator('xpath=ancestor::*[@role="dialog" or @aria-modal="true"]').count().catch(()=>0))continue;
+      return item;
+    }
+  }
+  return null;
+}
+async function selectFederalJuridica(frame, state, audit, job) {
+  const field=frame.locator(federalCnpjField).first();
+  if(await visible(field)) { state.federalPersonTypeSelected=true; return false; }
+  const radio=frame.getByRole('radio',{name:/pessoa\s+jur[ií]dica/i}).first();
+  if(await visible(radio)){
+    if(await radio.isChecked().catch(()=>false)){state.federalPersonTypeSelected=true;return false;}
+    await radio.check({timeout:4500});
+    state.federalPersonTypeSelected=true;
+    audit({type:'federal_person_type_selected',jobId:job.id,portal:'federal',action:'Pessoa Jurídica'});
+    return true;
+  }
+  const label=frame.getByText(/^Pessoa\s+Jur[ií]dica$/i).first();
+  if(await visible(label)){
+    const clickable=label.locator('xpath=ancestor-or-self::*[self::label or self::button or @role="radio" or contains(@class,"radio") or contains(@class,"card")][1]');
+    const clickableCount=await clickable.count().catch(()=>0);
+    await clickUsable(clickableCount?clickable:label);
+    state.federalPersonTypeSelected=true;
+    audit({type:'federal_person_type_selected',jobId:job.id,portal:'federal',action:'Pessoa Jurídica'});
+    return true;
+  }
+  return false;
+}
+function federalDates(text) { return [...String(text||'').matchAll(/\b(\d{2}\/\d{2}\/\d{4})\b/g)].map(m=>m[1]).map(value=>{const [,d,m,y]=value.match(/(\d{2})\/(\d{2})\/(\d{4})/),date=new Date(Date.UTC(Number(y),Number(m)-1,Number(d)));if(date.getUTCDate()!==Number(d)||date.getUTCMonth()!==Number(m)-1||date.getUTCFullYear()!==Number(y))return null;return {label:value,iso:`${y}-${m}-${d}`};}).filter(Boolean); }
+async function clickNewestFederalCertificate(frame, job, state, audit) {
+  const body=await frame.locator('body').innerText({timeout:2000}).catch(()=>''),normalized=body.replace(/[.\-/\s]/g,'');
+  if(!normalized.includes(job.cnpj))return null;
+  const rows=frame.locator('table tbody tr:visible');
+  const candidates=[];
+  for(let i=0;i<await rows.count();i++){
+    const row=rows.nth(i),text=await row.innerText().catch(()=>''),dates=federalDates(text);
+    if(/vencida|expirada|cancelada|inv[aá]lida|sem\s+validade/i.test(text))continue;
+    if(!text.replace(/[.\-/\s]/g,'').includes(job.cnpj)||!dates.length)continue;
+    let action=row.getByRole('button',{name:/segunda\s+via|baixar|download|emitir|visualizar|pdf/i}).first();
+    let link=row.getByRole('link',{name:/segunda\s+via|baixar|download|emitir|visualizar|pdf/i}).first();
+    if(!await visible(action).catch(()=>false))action=row.locator('button[title*="segunda via" i],button[aria-label*="segunda via" i],button[title*="pdf" i]').first();
+    if(!await visible(link).catch(()=>false))link=row.locator('a[title*="segunda via" i],a[aria-label*="segunda via" i],a[title*="pdf" i]').first();
+    const control=await visible(action)&&await action.isEnabled().catch(()=>false)?action:await visible(link)&&await link.isEnabled().catch(()=>false)?link:null;
+    if(!control)continue;
+    // The first date is the issue date in the Receita history table. Fall back
+    // to the last date only when the row presents a single date.
+    const issueDate=dates[0]; candidates.push({index:i,control,issueDate,text:text.slice(0,300)});
+  }
+  if(!candidates.length)return null;
+  candidates.sort((a,b)=>b.issueDate.iso.localeCompare(a.issueDate.iso));
+  const chosen=candidates[0],key=`federal_latest_copy:${chosen.index}:${chosen.issueDate.iso}`;
+  if(state.actions.has(key))return {status:'awaiting_response',message:'A certidão federal mais recente foi solicitada; aguardando o PDF oficial.'};
+  audit({type:'federal_latest_certificate_selected',jobId:job.id,cnpj:job.cnpj,portal:'federal',issuedAt:chosen.issueDate.label,row:chosen.index+1,action:'Solicitar segunda via da certidão mais recente'});
+  const captured = typeof job.captureFederalAction === 'function'
+    ? await job.captureFederalAction(chosen.control)
+    : (await clickUsable(chosen.control), null);
+  if(!captured?.captchaRequired)state.actions.add(key);
+  return {status:'awaiting_response',captured,message:`Certidão federal mais recente (${chosen.issueDate.label}) selecionada. Aguardando o PDF oficial.`};
+}
+async function clickGeneratedFederalDocument(frame, job, state, audit) {
+  if (!state.federalIssueSubmitted) return null;
+  const body=await frame.locator('body').innerText({timeout:2000}).catch(()=>''), normalized=body.normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase();
+  if (!/certidao.{0,50}(emitida|gerada)|(?:emitida|gerada).{0,50}certidao|emissao.{0,30}concluida/.test(normalized)) return null;
+  const nodes=frame.locator('button,a,[role="button"],input[type="button"],input[type="submit"]');
+  const candidates=[];
+  for(let i=0;i<Math.min(await nodes.count(),120);i++){
+    const element=nodes.nth(i);if(!await visible(element)||!await element.isEnabled().catch(()=>false))continue;
+    const info=await element.evaluate(el=>({text:(el.innerText||el.value||el.getAttribute('aria-label')||'').trim(),title:el.title||'',href:el.href||'',context:(el.closest('tr,section,main,[role="dialog"]')||el.parentElement)?.innerText||''})).catch(()=>null);
+    if(!info)continue;
+    const label=`${info.text} ${info.title} ${info.href}`.normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase();
+    const context=info.context.normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase();
+    if(!/pdf|baixar|download|imprimir|visualizar/.test(label)||!(/certidao|documento/.test(context)||/\.pdf(?:$|[?#])/.test(info.href)))continue;
+    candidates.push({element,label});
+  }
+  if(!candidates.length)return {status:'awaiting_response',message:'A Receita confirmou a emissão. Aguardando o botão ou arquivo PDF do documento.'};
+  const key=`federal_new_document:${frame.url()}:${candidates[0].label}`;
+  if(state.actions.has(key))return {status:'awaiting_response',message:'A certidão foi emitida; aguardando a resposta de download oficial.'};
+  audit({type:'federal_generated_certificate_detected',jobId:job.id,cnpj:job.cnpj,portal:'federal',action:'Capturar PDF da certidão recém-emitida'});
+  const captured=typeof job.captureFederalAction==='function'?await job.captureFederalAction(candidates[0].element):((await clickUsable(candidates[0].element)),null);
+  if(captured?.download||captured?.pdfBuffer)return {status:'awaiting_response',captured,message:'PDF da certidão recém-emitida recebido da Receita.'};
+  state.actions.add(key);
+  return {status:'awaiting_response',message:'Certidão emitida; aguardando o PDF oficial.'};
+}
+async function advanceFederal(frame,job,state,audit) {
+  if(new URL(frame.url()).hostname!=='servicos.receitafederal.gov.br')return null;
+  // The current Receita SPA starts on a person-type choice. Do not infer that
+  // the generic CNPJ field is ready until the PJ selection has been applied.
+  const selected=await selectFederalJuridica(frame,state,audit,job);
+  if(selected)return {status:'awaiting_response',message:'Pessoa Jurídica selecionada. Aguardando o formulário federal para informar o CNPJ.'};
+  const cookies=await handleFederalCookies(frame,job,audit);
+  if(cookies)return cookies;
+
+  const validNotice=frame.getByText(/Certidão\s+Válida\s+Encontrada/i).first();
+  if(await visible(validNotice)){
+    const dialog=frame.locator('[role="dialog"],[aria-modal="true"],dialog').filter({hasText:/Certidão\s+Válida\s+Encontrada/i}).first();
+    const scope=await visible(dialog)?dialog:frame;
+    const consult=await federalRoleButton(scope,[/^Consultar Certidão$/i]);
+    const key='federal_consult_existing';
+    if(!state.actions.has(key)&&await clickUsable(consult)){
+      state.actions.add(key);state.federalPhase='existing-history';state.federalExistingHistoryOpened=true;
+      audit({type:'federal_existing_certificates_opened',jobId:job.id,cnpj:job.cnpj,portal:'federal',action:'Consultar Certidão'});
+      return {status:'awaiting_response',message:'A Receita encontrou uma certidão existente. Abrindo o histórico para selecionar a mais recente.'};
+    }
+    // A valid-certificate prompt is a strict decision point. Never fall through
+    // to the generic "Emitir nova certidão" button if history is still loading.
+    return {status:'awaiting_response',message:'A Receita encontrou uma certidão válida. Aguardando a opção oficial para consultar a segunda via.'};
+  }
+
+  if(state.federalExistingHistoryOpened){
+    const existing=await existingFederalCertificate(frame,job,state,audit);
+    if(existing){
+      if(existing.captured?.captchaRequired)return existing;
+      return existing;
+    }
+  }
+
+  const generated=await clickGeneratedFederalDocument(frame,job,state,audit);
+  if(generated)return generated;
+  const latest=await clickNewestFederalCertificate(frame,job,state,audit);
+  if(latest)return latest;
+
+  const filled=await fillFirst(frame,[federalCnpjField],job.cnpj);
+  if(filled){state.filled=true;state.federalCnpjConfirmed=true;}
+  if(!state.filled)return null;
+
+  // The first control in the real action row is “Consultar Certidão”; it can
+  // return portal response 023 without issuing. The intended new-issuance CTA
+  // is the distinct semantic button “Emitir Certidão”. Never select the
+  // unrelated “Consulte certidões mais antigas” link.
+  const collection=frame.locator('app-coleta-parametros-pj');
+  const collectionVisible=await visible(collection);
+  if(!state.actions.has('federal_issue_request')){
+    const issue=await federalRoleButton(collectionVisible?collection:frame,[/^Emitir Certidão$/i]);
+    if(issue&&await visible(issue)&&await issue.isEnabled().catch(()=>false)){
+      const controlEvidence=await issue.evaluate(el=>({tag:el.tagName.toLowerCase(),id:el.id||'',className:typeof el.className==='string'?el.className:'',type:el.getAttribute('type')||'',text:(el.innerText||el.value||el.getAttribute('aria-label')||'').trim()})).catch(()=>({}));
+      const actionLabel=String(controlEvidence.text||'').replace(/\s+/g,' ').trim();
+      if(!/^Emitir Certidão$/i.test(actionLabel))return null;
+      state.actions.add('federal_issue_request');state.federalPhase='issue-requested';state.federalSubmitted=true;state.federalIssueSubmitted=true;state.federalSubmittedAt=Date.now();
+      audit({type:'federal_action_selected',jobId:job.id,portal:'federal',action:actionLabel,selector:'role=button[name="Emitir Certidão", exact=true]',element:controlEvidence,url:frame.url()});
+      let postEmitSnapshotLogged=false;
+      const captured=typeof job.captureFederalAction==='function'
+        ? await job.captureFederalAction(issue,{stopWhen:async()=>{
+          const text=await frame.locator('body').innerText().catch(()=>''),terminal=/Certidão\s+Válida\s+Encontrada|certid[aã]o.{0,50}(?:emitida|gerada)|(?:emitida|gerada).{0,50}certid[aã]o/i.test(text);
+          if(!postEmitSnapshotLogged&&Date.now()-state.federalSubmittedAt>750){postEmitSnapshotLogged=true;audit({type:'federal_post_emit_page_state',jobId:job.id,portal:'federal',url:frame.url(),text:text.slice(0,1200),terminal});}
+          return terminal;
+        }})
+        : (await clickUsable(issue), null);
+      audit({type:'federal_issue_requested',jobId:job.id,cnpj:job.cnpj,portal:'federal',action:actionLabel});
+      return {status:'awaiting_response',captured,message:`${actionLabel} solicitado. Verificando se a Receita encontrou uma certidão válida ou gerou um novo documento.`};
+    }
+  }
+
+  // Stage 2: the Receita SPA can ask for a parameter in a separate component.
+  // Restrict the second click to that component and to an enabled, meaningful
+  // action. The same XPath is reevaluated after every DOM transition.
+  const parameter=frame.locator('app-informar-parametro-pj');
+  if(await visible(parameter)){
+    const body=await parameter.innerText().catch(()=>''),fingerprint=crypto.createHash('sha1').update(body).digest('hex').slice(0,12),key=`federal_parameter:${fingerprint}`;
+    if(!state.actions.has(key)){
+      let next=frame.locator(federalParameterXPath);
+      if(!await visible(next)||!await next.isEnabled().catch(()=>false))next=await federalRoleButton(parameter,[/consultar|continuar|prosseguir|emitir|gerar/i]);
+      if(next&&await clickUsable(next)){
+        state.actions.add(key);state.federalPhase='parameter-submitted';state.federalSubmittedAt=Date.now();
+        audit({type:'federal_parameter_submitted',jobId:job.id,cnpj:job.cnpj,portal:'federal',action:'Prosseguir com o parâmetro informado'});
+        return {status:'awaiting_response',message:'Parâmetro informado à Receita. Analisando a lista de certidões disponíveis.'};
+      }
+    }
+  }
+
+  return null;
+}
 async function advance(job,audit=()=>{}) {
   if(terminal(job))return null;
   if(job.mode!=='issue')return {status:'awaiting_user',message:'Portal de autenticação aberto. Confira os dados da certidão na janela do órgão e conclua a consulta.'};
@@ -85,9 +271,11 @@ async function advance(job,audit=()=>{}) {
     let trusted=false,blocked=false,filled=false;
     for(const page of job.context.pages())for(const frame of page.frames()){
       if(!trustedUrl(frame.url(),job.portal))continue;trusted=true;
-      const cookies=state.federalSubmitted?await handleFederalCookies(frame,job,audit):null;
-      if(cookies)return cookies;
       const body=await frame.locator('body').innerText({timeout:2500});
+      if(job.portal.key==='federal'){
+        const federal=await advanceFederal(frame,job,state,audit);
+        if(federal)return federal;
+      }
       if(new URL(frame.url()).hostname==='grpfordam.sefin.fortaleza.ce.gov.br'){
         const modal=frame.locator('form#modalReimpressaoForm');
         if(await visible(modal)){
@@ -103,20 +291,6 @@ async function advance(job,audit=()=>{}) {
           return {status:'awaiting_response',message:`${name}: certidão anterior válida até ${match[1]} (${days} dias restantes). Aguardando o documento do município.`};
         }
         if(await visible(frame.locator('#gifAguarde')))return {status:'awaiting_response',message:'O município está processando a solicitação. Aguardando o término do carregamento.'};
-      }
-      if(new URL(frame.url()).hostname==='servicos.receitafederal.gov.br'&&state.filled){
-        if(state.federalSubmittedAt&&Date.now()-state.federalSubmittedAt>60000)return {status:'awaiting_user',message:'A Receita não concluiu a etapa em 60 segundos. O próximo comando automático foi suspenso para evitar duplicidade. Confira a página interativa ou cancele a consulta.'};
-        const renew=frame.getByRole('button',{name:/^Emitir nova certid[aã]o$/i});
-        if(await visible(renew)){
-          if(!await renew.isEnabled())return {status:'awaiting_response',message:'Aguardando a Receita habilitar a confirmação de nova emissão.'};
-          const security=await challenge(frame);
-          if(security.blocked)return {status:'captcha_required',message:'A Receita solicitou verificação de segurança antes da nova emissão.'};
-          if(!state.actions.has('federal_new_certificate')){
-            state.actions.add('federal_new_certificate');state.federalSubmittedAt=Date.now();await renew.click({timeout:5000});
-            audit({type:'automatic_issuance_attempt',cnpj:job.cnpj,jobId:job.id,portal:job.portal.key,action:'Emitir nova certidão'});
-          }
-          return {status:'awaiting_response',message:'Aviso de certidão existente identificado. Nova emissão solicitada à Receita; aguardando o PDF.'};
-        }
       }
       if(job.portal.key==='federal'){const securityError=federalSecurityError(body);if(securityError)return securityError;}
       const failure=body.match(/(?:Não foi possível concluir a ação[^\n]*|CNPJ inválido[^\n]*|Serviço (?:temporariamente )?indisponível[^\n]*|Caracteres (?:inválidos|incorretos)[^\n]*)/i);
@@ -205,4 +379,4 @@ async function advance(job,audit=()=>{}) {
     return {status:'awaiting_user',message:'Não foi identificado um formulário de emissão compatível nesta página. Abra Abrir janela interativa para verificar a navegação ou os dados adicionais solicitados.'};
   }finally{state.busy=false;}
 }
-module.exports={advance,prepare,challenge};
+module.exports={advance,prepare,challenge,advanceFederal,clickNewestFederalCertificate};

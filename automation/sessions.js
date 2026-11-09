@@ -6,6 +6,7 @@ const { trustedUrl } = require('../config/registry');
 const { parseCertificate } = require('../lib/domain');
 const { advance } = require('./issuer-engine');
 const {waitForFederalForm}=require('./federal-readiness');
+const {handleFederalCookies}=require('./federal-cookies');
 const {accessBlockMessage}=require('./access-block');
 const {advanceVerification}=require('./verification');
 const {userError}=require('../lib/errors');
@@ -80,16 +81,20 @@ class PortalSessions {
     job.context.on('page', attach); job.page = await job.context.newPage();
     await job.page.goto(job.mode === 'verify' ? job.portal.verifyUrl : job.portal.url, { waitUntil: 'domcontentloaded', timeout: 45000 });
     if(job.portal.key==='federal'&&job.mode==='issue'){
-      this.update(job,'opening','Aguardando o formulário da Receita para preencher o CNPJ e clicar em Emitir…');
+      this.update(job,'opening','Abrindo a consulta de Pessoa Jurídica da Receita Federal…');
       // Receita Federal is a SPA: DOMContentLoaded precedes the CNPJ form.
       const field=job.page.locator('input[name="niContribuinte"]');
-      try{await field.waitFor({state:'visible',timeout:15000});}catch{
+      try{await field.waitFor({state:'visible',timeout:2500});}catch{
+        const radio=job.page.getByRole('radio',{name:/Pessoa Jurídica/i}).first();
         const pj=job.page.getByText('Pessoa Jurídica',{exact:true}).first();
-        if(await pj.isVisible()){await pj.click({timeout:5000});await field.waitFor({state:'visible',timeout:15000});}
+        if(await radio.isVisible().catch(()=>false))await radio.check({timeout:5000});
+        else if(await pj.isVisible().catch(()=>false))await pj.click({timeout:5000});
+        await field.waitFor({state:'visible',timeout:15000});
       }
+      await handleFederalCookies(job.page,job,event=>this.store.audit(event,job.actor));
       const ready=await waitForFederalForm(job,event=>this.store.audit(event,job.actor));
       if(job.status==='cancelled')return;
-      if(!ready){job.federalPreparationFailed=true;this.update(job,'awaiting_user','A Receita não disponibilizou o formulário estável em 30 segundos. Nenhuma emissão foi enviada. Cancele esta consulta e tente novamente mais tarde.');this.startMonitoring(job);return;}
+      if(!ready){job.federalPreparationFailed=true;this.update(job,'awaiting_user','A Receita não disponibilizou o formulário de Pessoa Jurídica com o botão Consultar Certidão. Nenhuma consulta foi enviada. Confira a janela do órgão ou cancele para tentar novamente.');this.startMonitoring(job);return;}
     }
     await this.guide(job);
     if(job.status==='cancelled')return;

@@ -1,5 +1,8 @@
 const fs = require('fs');
 const path = require('path');
+const { trustedUrl } = require('../config/registry');
+const { handleFederalCookies } = require('./federal-cookies');
+const { advance: advanceIssuer } = require('./issuer-engine');
 
 function onlyDigits(v) { return String(v || '').replace(/\D/g, ''); }
 
@@ -21,6 +24,16 @@ function classifyFederalPortalError(text) {
     occurrence: match[2] || '',
     category: 'PORTAL_TEMPORARIAMENTE_INDISPONIVEL',
     message: `A Receita Federal respondeu com o código ${match[1]} e pediu para tentar novamente em alguns minutos. Nenhuma certidão foi emitida nesta tentativa.`
+  };
+}
+
+function classifyStateCePortalError(text) {
+  const source = String(text || '').replace(/\s+/g, ' ').trim();
+  if (!/n[aã]o foi poss[ií]vel emitir o documento solicitado[\s\S]{0,240}consultar pend[eê]ncias no site/i.test(source)) return null;
+  return {
+    category: 'PORTAL_SOLICITA_CONSULTA_DE_PENDENCIAS',
+    provider: 'SEFAZ Ceará / PGE Ceará',
+    message: 'A SEFAZ do Ceará informou que não foi possível emitir o documento pela consulta online e orientou verificar pendências no Portal do Contribuinte da PGE. Nenhum PDF estadual foi emitido nesta tentativa.'
   };
 }
 
@@ -98,6 +111,233 @@ async function waitForPdfInDirectory(dir, timeout = 60000) {
   return null;
 }
 
+function municipalCertificatePath(baseDir, cnpj) {
+  const dir = path.join(baseDir, 'data', 'certidoes', onlyDigits(cnpj), new Date().toISOString().slice(0, 10));
+  fs.mkdirSync(dir, { recursive: true });
+  return path.join(dir, 'CND MUNICIPAL.pdf');
+}
+
+function safeMunicipalUrl(value) {
+  try { const url = new URL(value); return `${url.origin}${url.pathname}`; }
+  catch { return ''; }
+}
+
+async function waitForManualMunicipalCertificate({ page, browser, portal, cnpj, baseDir, emit }) {
+  // Managed Playwright downloads must remain under Playwright control so its
+  // Download.saveAs API can safely copy the file. CDP folders are only needed
+  // when attached to an externally managed Chrome session.
+  const downloadDir = browser.connectedToExistingChrome
+    ? await prepareControlledDownloadDir(page, baseDir, cnpj, emit, portal.key)
+    : null;
+  const context = browser.context;
+  const downloadDirs = new Set(downloadDir ? [downloadDir] : []);
+  const filePath = municipalCertificatePath(baseDir, cnpj);
+  try { fs.rmSync(filePath, { force: true }); } catch (_) {}
+  let settled = false;
+  let downloadCaptureStarted = false;
+  let resolveResult;
+  const resultPromise = new Promise(resolve => { resolveResult = resolve; });
+  const listeners = [];
+  const printBinding = `__centralMunicipalPrint_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+
+  const finish = result => {
+    if (settled) return;
+    settled = true;
+    resolveResult(result);
+  };
+  const previousManualHandler = browser.acceptManualMunicipalPdf;
+  const persistPdf = (data, captureStage, sourceUrl, manualValidation = null) => {
+    if (settled || !Buffer.isBuffer(data) || data.length > 15 * 1024 * 1024 || !looksLikePdf(data)) return false;
+    fs.writeFileSync(filePath, data);
+    emit({ type: 'municipal_pdf_captured', portal: portal.key, sourceUrl: safeMunicipalUrl(sourceUrl), captureStage, bytes: data.length, manualValidation: Boolean(manualValidation), message: manualValidation ? 'PDF recebido após conferência humana do código e CNPJ; encaminhado ao arquivo da Central.' : 'PDF recebido do portal oficial e salvo no armazenamento da Central.' });
+    finish({ filePath, captureStage, ...(manualValidation ? { manualValidation } : {}) });
+    return true;
+  };
+  browser.acceptManualMunicipalPdf = async ({ buffer, code }) => {
+    if (settled || !Buffer.isBuffer(buffer) || !looksLikePdf(buffer)) return false;
+    const manualValidation = {
+      status: 'conferida_pelo_responsavel',
+      method: 'confirmacao_no_portal_e_correspondencia_cnpj_codigo_no_pdf',
+      code: String(code || '').toUpperCase().replace(/[^A-Z0-9]/g, ''),
+      confirmedAt: new Date().toISOString(),
+      note: 'O responsável confirmou a conferência no portal oficial. A Central confirmou a presença do CNPJ e do código no PDF; não consultou automaticamente a base do órgão.'
+    };
+    return persistPdf(buffer, 'municipal-manual-validated-upload', page.url(), manualValidation);
+  };
+  const capturePrintPreview = async source => {
+    const target = source?.page;
+    if (settled || !target || target.isClosed?.() || !trustedUrl(target.url(), portal)) return false;
+    const text = await target.locator('body').innerText({ timeout: 2500 }).catch(() => '');
+    const hasCnpj = onlyDigits(text).includes(onlyDigits(cnpj));
+    const isCertificate = /certid[aã]o/i.test(text)
+      && /v[aá]lida\s+at[eé]|valida\s+por|\bvalidade\b|c[oó]d\.?\s+de\s+valida[cç][aã]o|c[oó]digo\s+de\s+(?:autentica[cç][aã]o|valida[cç][aã]o)|n[º°]\s*\d+/i.test(text);
+    if (!hasCnpj || !isCertificate) {
+      emit({ type: 'municipal_print_ignored', portal: portal.key, sourceUrl: safeMunicipalUrl(target.url()), hasCnpj, isCertificate, message: 'A ação de impressão não parece mostrar a certidão final deste CNPJ; nenhum documento foi arquivado.' });
+      return false;
+    }
+    const pdf = await printPageToPdf(target).catch(() => null);
+    if (!pdf || !looksLikePdf(pdf)) {
+      emit({ type: 'municipal_print_capture_failed', portal: portal.key, sourceUrl: safeMunicipalUrl(target.url()), message: 'O navegador abriu a impressão, mas não foi possível renderizar a página oficial como PDF. A consulta continua aberta para anexar o PDF manualmente.' });
+      return false;
+    }
+    return persistPdf(pdf, 'municipal-print-preview', target.url());
+  };
+  if (typeof browser.context.exposeBinding === 'function') {
+    try {
+      await browser.context.exposeBinding(printBinding, capturePrintPreview);
+      await browser.context.addInitScript(name => {
+        window.addEventListener('beforeprint', () => {
+          try { Promise.resolve(window[name]()).catch(() => {}); } catch (_) {}
+        });
+      }, printBinding);
+    } catch (error) {
+      emit({ type: 'municipal_print_monitor_warning', portal: portal.key, message: `Monitor da impressão indisponível: ${error.message}` });
+    }
+  }
+  const attachPage = target => {
+    if (!target || target.isClosed?.()) return;
+    const installPrintListener = () => target.evaluate(name => {
+      if (window.__centralMunicipalBeforePrintInstalled) return;
+      window.__centralMunicipalBeforePrintInstalled = true;
+      window.addEventListener('beforeprint', () => {
+        try { Promise.resolve(window[name]()).catch(() => {}); } catch (_) {}
+      });
+    }, printBinding).catch(() => {});
+    target.on('domcontentloaded', installPrintListener);
+    listeners.push(() => target.off('domcontentloaded', installPrintListener));
+    installPrintListener();
+    const onDownload = download => {
+      if (settled || downloadCaptureStarted) return;
+      const sourceUrl = target.url();
+      const downloadUrl = download.url();
+      const officialSource = trustedUrl(sourceUrl, portal);
+      const officialDownload = trustedUrl(downloadUrl, portal);
+      if (!officialSource || (!officialDownload && !/^(blob:|data:application\/pdf)/i.test(downloadUrl))) {
+        emit({ type: 'municipal_download_rejected', portal: portal.key, sourceUrl: safeMunicipalUrl(sourceUrl), downloadUrl: safeMunicipalUrl(downloadUrl), message: 'Download ignorado porque não veio da sessão oficial da prefeitura.' });
+        return;
+      }
+      downloadCaptureStarted = true;
+      (async () => {
+        const stream = await download.createReadStream();
+        if (!stream) throw new Error('O navegador não disponibilizou o arquivo baixado.');
+        const chunks = [];
+        let size = 0;
+        for await (const chunk of stream) {
+          size += chunk.length;
+          if (size > 15 * 1024 * 1024) { stream.destroy(); throw new Error('O PDF excede o limite de 15 MB.'); }
+          chunks.push(chunk);
+        }
+        const data = Buffer.concat(chunks);
+        if (!looksLikePdf(data)) throw new Error('O arquivo baixado não contém um PDF válido.');
+        fs.writeFileSync(filePath, data);
+        emit({ type: 'municipal_pdf_captured', portal: portal.key, sourceUrl: safeMunicipalUrl(sourceUrl), captureStage: 'municipal-manual-official-download', bytes: data.length, message: 'PDF recebido do portal oficial e salvo no armazenamento da Central.' });
+        finish({ filePath, captureStage: 'municipal-manual-official-download' });
+      })().catch(error => {
+        downloadCaptureStarted = false;
+        Promise.resolve(download.failure()).catch(() => null).then(failure => {
+          if (!settled && !downloadCaptureStarted) emit({ type: 'municipal_download_invalid', portal: portal.key, sourceUrl: safeMunicipalUrl(sourceUrl), downloadUrl: safeMunicipalUrl(downloadUrl), failure: failure || '', message: `Arquivo baixado não foi arquivado como PDF: ${error.message}` });
+        });
+      });
+    };
+    const onResponse = response => {
+      if (settled) return;
+      const headers = response.headers();
+      const disposition = headers['content-disposition'] || '';
+      const isPdf = /application\/pdf/i.test(headers['content-type'] || '') || (/\.pdf(?:[";?]|$)/i.test(disposition) && /^attachment\b/i.test(disposition)) || /\.pdf(?:[?#]|$)/i.test(response.url());
+      if (!trustedUrl(response.url(), portal) || !isPdf) return;
+      (async () => {
+        const data = await response.body();
+        if (data.length > 15 * 1024 * 1024 || !looksLikePdf(data)) {
+          emit({ type: 'municipal_download_invalid', portal: portal.key, sourceUrl: safeMunicipalUrl(response.url()), message: 'O portal respondeu à ação, mas o conteúdo recebido não é um PDF válido.' });
+          return;
+        }
+        persistPdf(data, 'municipal-manual-official-pdf-view', response.url());
+      })().catch(error => { if (!settled && !downloadCaptureStarted) emit({ type: 'municipal_download_invalid', portal: portal.key, sourceUrl: safeMunicipalUrl(response.url()), message: `Não foi possível capturar o PDF oficial: ${error.message}` }); });
+    };
+    target.on('download', onDownload);
+    target.on('response', onResponse);
+    listeners.push(() => { target.off('download', onDownload); target.off('response', onResponse); });
+    // Preserve the PDF response before Chromium navigates to its native PDF
+    // viewer, which can invalidate Playwright's later response.body() call.
+    context.newCDPSession(target).then(async session => {
+      const pdfRequests = new Map();
+      const responseReceived = event => {
+        if (trustedUrl(event.response.url, portal) && /application\/pdf/i.test(event.response.mimeType || '')) {
+          pdfRequests.set(event.requestId, event.response.url);
+        }
+      };
+      const loadingFinished = event => {
+        const sourceUrl = pdfRequests.get(event.requestId);
+        if (!sourceUrl) return;
+        pdfRequests.delete(event.requestId);
+        session.send('Network.getResponseBody', { requestId: event.requestId }).then(body => {
+          const data = body.base64Encoded ? Buffer.from(body.body, 'base64') : Buffer.from(body.body, 'utf8');
+          persistPdf(data, 'municipal-manual-official-pdf-response', sourceUrl);
+        }).catch(error => { if (!settled && !downloadCaptureStarted) emit({ type: 'municipal_download_invalid', portal: portal.key, sourceUrl: safeMunicipalUrl(sourceUrl), message: `Não foi possível obter o corpo PDF da resposta oficial: ${error.message}` }); });
+      };
+      await session.send('Network.enable');
+      session.on('Network.responseReceived', responseReceived);
+      session.on('Network.loadingFinished', loadingFinished);
+      listeners.push(() => { session.off('Network.responseReceived', responseReceived); session.off('Network.loadingFinished', loadingFinished); session.detach().catch(() => {}); });
+    }).catch(error => emit({ type: 'municipal_pdf_monitor_warning', portal: portal.key, message: `Monitor de resposta PDF indisponível nesta aba: ${error.message}` }));
+    // Alguns portais abrem um relatório em uma nova aba antes do download.
+    if (browser.connectedToExistingChrome) {
+      prepareControlledDownloadDir(target, baseDir, cnpj, emit, portal.key).then(dir => downloadDirs.add(dir)).catch(() => {});
+    }
+  };
+
+  for (const target of context.pages()) attachPage(target);
+  const onNewPage = target => attachPage(target);
+  context.on('page', onNewPage);
+  listeners.push(() => context.off('page', onNewPage));
+  let stopDirectoryWatch = false;
+  const directoryWatch = downloadDirs.size ? (async () => {
+    while (!stopDirectoryWatch && !settled && !browser.closed) {
+      for (const dir of downloadDirs) {
+        const recovered = await waitForPdfInDirectory(dir, 500);
+        if (!recovered) continue;
+        fs.writeFileSync(filePath, recovered.pdfBuffer);
+        finish({ filePath, captureStage: 'municipal-manual-controlled-download' });
+        return;
+      }
+    }
+  })() : Promise.resolve();
+
+  const message = 'Conclua a emissão manualmente no portal oficial aberto. Quando baixar ou abrir o PDF da certidão, a Central vai capturá-lo e arquivá-lo automaticamente nesta empresa. Use Parar para cancelar.';
+  emit({ type: 'municipal_manual_issuance', portal: portal.key, url: page.url(), message: 'Portal municipal oficial aberto; aguardando a emissão e o download manual do documento.' });
+  if (typeof browser.focusInteractiveWindow === 'function') await browser.focusInteractiveWindow(page);
+  else await page.bringToFront?.().catch(() => {});
+  emit({ type: 'human_action_required', portal: portal.key, manualDownloadRequired: true, message });
+
+  let activeResumeResolver = null;
+  try {
+    while (!browser.closed) {
+      const resumePromise = new Promise(resolve => {
+        activeResumeResolver = () => resolve('resume');
+        browser.resumeResolver = activeResumeResolver;
+      });
+      const result = await Promise.race([resultPromise, resumePromise]);
+      if (result && typeof result === 'object') return result;
+      if (browser.closed) return null;
+
+      emit({ type: 'manual_resume', portal: portal.key, message: 'Usuário pediu para verificar se o PDF municipal foi baixado.' });
+      const recovered = downloadDir ? await waitForPdfInDirectory(downloadDir, 2500) : null;
+      if (recovered) {
+        fs.writeFileSync(filePath, recovered.pdfBuffer);
+        return { filePath, captureStage: 'municipal-manual-controlled-download' };
+      }
+      emit({ type: 'human_action_required', portal: portal.key, manualDownloadRequired: true, manualUploadRequired: true, message: 'Não consegui capturar o arquivo do navegador. Baixe o PDF emitido no portal e clique em “Anexar PDF municipal” para enviá-lo, informar o código de autenticação e confirmar a conferência no site oficial. A consulta permanecerá aberta.' });
+    }
+    return null;
+  } finally {
+    stopDirectoryWatch = true;
+    await directoryWatch.catch(() => {});
+    if (browser.resumeResolver === activeResumeResolver) browser.resumeResolver = null;
+    if (browser.acceptManualMunicipalPdf !== previousManualHandler) browser.acceptManualMunicipalPdf = previousManualHandler || null;
+    for (const cleanup of listeners) cleanup();
+  }
+}
+
 async function fillCnpj(page, selectors, cnpj, portalKey = '') {
   const digits = onlyDigits(cnpj);
   const formatted = digits.length === 14
@@ -164,7 +404,7 @@ async function clickFirstVisible(page, selectors) {
   for (const scope of page.frames()) {
   for (const selector of selectors || []) {
     try {
-      const loc = scope.locator(selector).first();
+      const loc = typeof selector === 'string' ? scope.locator(selector).first() : selector;
       if (!(await loc.count())) continue;
       const type = String(await loc.getAttribute('type').catch(() => '') || '').toLowerCase();
       if (['radio', 'checkbox'].includes(type)) {
@@ -204,11 +444,11 @@ async function ensureCaptchaClearBeforeSubmit({ page, browser, emit, portal, sta
   return { page: current, allowed: true, captcha: after };
 }
 
-async function capturePdfFromClick(page, context, selectors, timeout = 30000, browser = null) {
+async function capturePdfFromClick(page, context, selectors, timeout = 30000, browser = null, stopWhen = null) {
   for (const scope of page.frames()) {
   for (const selector of selectors || []) {
     try {
-      const loc = scope.locator(selector).first();
+      const loc = typeof selector === 'string' ? scope.locator(selector).first() : selector;
       if (!(await loc.count())) {
         await loc.waitFor({ state: 'visible', timeout: 2500 }).catch(() => {});
       }
@@ -239,6 +479,7 @@ async function capturePdfFromClick(page, context, selectors, timeout = 30000, br
       for (let attempt = 0; attempt < 32; attempt++) {
         winner = await Promise.race([...eventSignals, page.waitForTimeout(250).then(() => null)]);
         if (winner) break;
+        if (stopWhen && await Promise.resolve(stopWhen()).catch(() => false)) return { intermediate: true, page };
         const printPage = context.pages().find(candidate => /\/imprimir\//i.test(candidate.url()));
         if (printPage) {
           try {
@@ -252,9 +493,11 @@ async function capturePdfFromClick(page, context, selectors, timeout = 30000, br
       }
 
       if (!winner) {
+        if (stopWhen) return null;
         winner = await Promise.race([...eventSignals, page.waitForTimeout(timeout).then(() => null)]);
       }
       if (winner?.kind === 'download') return { download: winner.download, page: null };
+      if (stopWhen && await Promise.resolve(stopWhen()).catch(() => false)) return { intermediate: true, page };
 
       const popup = winner?.kind === 'popup' ? winner.popup : null;
       if (popup) {
@@ -318,6 +561,266 @@ async function capturePdfFromClick(page, context, selectors, timeout = 30000, br
   }
   }
   return null;
+}
+
+function federalDate(value) {
+  const match = String(value || '').trim().match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+  return match ? `${match[3]}-${match[2]}-${match[1]}` : '';
+}
+
+// When Receita reports an existing valid certificate, consult the issued
+// records and retrieve its second copy. Issuing another certificate can fail
+// for a company that already has a valid document, even though the official
+// second-copy route works.
+async function captureExistingFederalSecondCopy(page, context, cnpj, browser, emit) {
+  const notice = page.getByText(/Certidão Válida Encontrada/i).first();
+  const noticeVisible = await notice.isVisible().catch(() => false);
+  if (!noticeVisible) return null;
+  const dialog = page.locator('[role="dialog"],dialog,.br-modal,[aria-modal="true"]').filter({ hasText: /Certidão Válida Encontrada/i }).first();
+  const scope = await dialog.isVisible().catch(() => false) ? dialog : page;
+  const consult = scope.getByRole('button', { name: 'Consultar Certidão', exact: true }).last();
+  if (!await consult.isVisible().catch(() => false) || !await consult.isEnabled().catch(() => false)) {
+    throw new Error('A Receita informou que há certidão válida, mas a opção oficial “Consultar Certidão” não está disponível. Nenhuma nova emissão foi solicitada.');
+  }
+  emit({ type: 'federal_valid_certificate_found', portal: 'federal', message: 'A Receita encontrou uma certidão válida. Consultando o histórico oficial para emitir a segunda via.' });
+  await consult.click({ timeout: 7000 });
+
+  const results = page.locator('table tbody tr:visible');
+  const search = page.getByRole('button', { name: 'Consultar Certidão', exact: true }).last();
+  const queryForm = page.getByRole('textbox', { name: 'Data Inicial', exact: true });
+  const started = Date.now();
+  while (Date.now() - started < 20000) {
+    if (await results.count().catch(() => 0)) break;
+    if (await queryForm.isVisible().catch(() => false) && await search.isVisible().catch(() => false)) {
+      const body = await page.locator('body').innerText().catch(() => '');
+      if (!body.replace(/[.\/\-\s]/g, '').includes(onlyDigits(cnpj))) {
+        throw new Error('A consulta de certidões existentes da Receita não confirmou o CNPJ informado.');
+      }
+      const from = queryForm;
+      const to = page.getByRole('textbox', { name: 'Data Final', exact: true });
+      const fromValue = String(await from.inputValue().catch(() => '')).trim();
+      const toValue = String(await to.inputValue().catch(() => '')).trim();
+      // Do not submit an incomplete or ambiguous search range. Keep the
+      // session open with an explicit diagnostic instead of guessing dates.
+      if (!federalDate(fromValue) || !federalDate(toValue) || federalDate(fromValue) > federalDate(toValue)) {
+        throw new Error('A Receita abriu a consulta de certidões existentes, mas o período de pesquisa está vazio ou inválido. Confira a janela do órgão; nenhuma nova emissão foi solicitada.');
+      }
+      emit({ type: 'federal_existing_search', portal: 'federal', message: 'Pesquisando certidões anteriores no período exibido pela Receita.' });
+      await search.click({ timeout: 7000 });
+      await page.waitForTimeout(200);
+      continue;
+    }
+    await page.waitForTimeout(250);
+  }
+
+  const body = await page.locator('body').innerText().catch(() => '');
+  if (!body.replace(/[.\/\-\s]/g, '').includes(onlyDigits(cnpj))) throw new Error('O resultado da consulta de certidões da Receita não confirma o CNPJ esperado.');
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const candidates = [];
+  const rows = page.locator('table tbody tr:visible');
+  for (let i = 0; i < await rows.count(); i++) {
+    const row = rows.nth(i), cells = await row.locator('td').allTextContents().catch(() => []);
+    if (!cells.some(value => /^\s*Válida\s*$/i.test(value))) continue;
+    const expiry = cells.map(federalDate).filter(Boolean).at(-1);
+    if (!expiry || (Date.parse(`${expiry}T00:00:00`) - today.getTime()) / 86400000 < 0) continue;
+    const secondCopy = row.locator('button[title="Segunda via"],a[title="Segunda via"],[aria-label="Segunda via"]');
+    if (await secondCopy.isVisible().catch(() => false) && await secondCopy.isEnabled().catch(() => false)) candidates.push({ expiry, rowIndex: i });
+  }
+  candidates.sort((a, b) => b.expiry.localeCompare(a.expiry));
+  if (!candidates.length) {
+    throw new Error('A Receita confirmou uma certidão existente, mas a pesquisa não apresentou segunda via válida para o CNPJ. Confira os filtros na janela do órgão; a Central não enviou uma emissão duplicada.');
+  }
+  const chosen = candidates[0], selector = `table tbody tr:nth-of-type(${chosen.rowIndex + 1}) button[title="Segunda via"], table tbody tr:nth-of-type(${chosen.rowIndex + 1}) a[title="Segunda via"], table tbody tr:nth-of-type(${chosen.rowIndex + 1}) [aria-label="Segunda via"]`;
+  emit({ type: 'federal_existing_second_copy', portal: 'federal', validade: chosen.expiry, message: `Certidão válida encontrada até ${chosen.expiry.split('-').reverse().join('/')}. Solicitando a segunda via oficial.` });
+  const captured = await capturePdfFromClick(page, context, [selector], 30000, browser);
+  if (!captured?.download && !captured?.pdfBuffer) throw new Error('A Receita listou uma certidão válida, mas não foi possível capturar a resposta da segunda via. A consulta permanece pendente; nenhum PDF foi arquivado.');
+  return captured;
+}
+
+// The Receita SPA can render its cookie notice several seconds after the
+// document and CNPJ form. Do not submit the CNPJ until the landing screen has
+// settled and any late consent notice has been handled.
+async function waitForFederalLanding({ page, job, emit, minimumMs = 8500, timeoutMs = 25000 }) {
+  const started = Date.now();
+  let lastSnapshot = '';
+  let stableSince = 0;
+  let lastCookieCheck = 0;
+  emit({ type: 'federal_loading_wait', portal: 'federal', message: 'Aguardando o portal da Receita carregar antes de enviar o CNPJ.' });
+
+  while (Date.now() - started < timeoutMs) {
+    if (page.isClosed()) throw new Error('A aba da Receita Federal foi fechada durante o carregamento inicial.');
+    if (Date.now() - lastCookieCheck >= 500) {
+      lastCookieCheck = Date.now();
+      const cookies = await handleFederalCookies(page, job, event => emit({ ...event, portal: 'federal' }));
+      if (cookies?.status === 'awaiting_response') {
+        emit({ type: 'federal_flow_progress', portal: 'federal', stage: 'cookies', message: cookies.message });
+      } else if (cookies?.status === 'awaiting_user') {
+        return { ready: false, interactionRequired: true, message: cookies.message };
+      }
+    }
+
+    const snapshot = await page.evaluate(() => {
+      const visible = el => !!el && !!el.getClientRects().length && getComputedStyle(el).visibility !== 'hidden' && getComputedStyle(el).display !== 'none';
+      const controls = [...document.querySelectorAll('input,button,[role="radio"],a')]
+        .filter(visible)
+        .map(el => `${el.tagName}:${el.getAttribute('name') || el.id || el.getAttribute('aria-label') || el.value || el.innerText || ''}:${el.disabled ? 'disabled' : 'enabled'}`)
+        .join('|');
+      return JSON.stringify({ ready: document.readyState, busy: !!document.querySelector('[aria-busy="true"]'), text: (document.body?.innerText || '').replace(/\s+/g, ' ').slice(0, 3000), controls });
+    }).catch(() => '');
+    if (snapshot && snapshot === lastSnapshot) stableSince ||= Date.now();
+    else stableSince = 0;
+    lastSnapshot = snapshot;
+
+    const pageState = snapshot ? JSON.parse(snapshot) : null;
+    const ready = pageState && Date.now() - started >= minimumMs && stableSince && Date.now() - stableSince >= 1200
+      && !pageState.busy && pageState.ready === 'complete';
+    if (ready) return { ready: true };
+    await page.waitForTimeout(250);
+  }
+  return { ready: false, interactionRequired: false, message: 'A página da Receita não estabilizou dentro do prazo inicial; o CNPJ não foi enviado.' };
+}
+
+async function saveFederalErrorDiagnostic({ page, baseDir, cnpj, portalError }) {
+  const dir = path.join(baseDir, 'data', 'diagnostics');
+  fs.mkdirSync(dir, { recursive: true });
+  const stem = `federal-${onlyDigits(cnpj)}-${Date.now()}-${portalError.portalCode}`;
+  const screenshotPath = path.join(dir, `${stem}.png`);
+  const jsonPath = path.join(dir, `${stem}.json`);
+  const dom = await page.evaluate(() => {
+    const visible = el => !!el.getClientRects().length && getComputedStyle(el).display !== 'none' && getComputedStyle(el).visibility !== 'hidden';
+    const interactive = [...document.querySelectorAll('button,input,select,textarea,a,[role="button"],[role="radio"]')]
+      .filter(visible).slice(0, 100).map(el => ({
+        tag: el.tagName, type: el.type || '', id: el.id || '', name: el.getAttribute('name') || '',
+        text: (el.innerText || el.value || el.getAttribute('aria-label') || '').trim().slice(0, 160),
+        disabled: !!el.disabled
+      }));
+    return { title: document.title, text: (document.body?.innerText || '').slice(0, 12000), interactive };
+  }).catch(error => ({ title: '', text: '', interactive: [], domError: String(error?.message || error) }));
+  await page.screenshot({ path: screenshotPath, fullPage: true, timeout: 10000 }).catch(() => {});
+  const diagnostic = {
+    capturedAt: new Date().toISOString(), portal: 'federal', url: page.url(),
+    portalCode: portalError.portalCode, occurrence: portalError.occurrence,
+    screenshotPath: fs.existsSync(screenshotPath) ? screenshotPath : null,
+    ...dom
+  };
+  fs.writeFileSync(jsonPath, JSON.stringify(diagnostic, null, 2), 'utf8');
+  return { diagnosticPath: jsonPath, screenshotPath: diagnostic.screenshotPath, url: diagnostic.url };
+}
+
+// Follow the Receita PJ flow: select Pessoa Jurídica, accept cookies, enter
+// the CNPJ, click Emitir Certidão, and handle either the valid-copy history
+// or the newly generated document.
+async function runFederalReceitaFlow({ page, browser, portal, cnpj, baseDir, emit }) {
+  const context = browser.context;
+  const downloadDir = await prepareControlledDownloadDir(page, baseDir, cnpj, emit, 'federal');
+  const federalPortal = {
+    ...portal,
+    allowedHosts: portal.allowedHosts?.length ? portal.allowedHosts : ['servicos.receitafederal.gov.br']
+  };
+  const job = {
+    id: 'central-federal-session', mode: 'issue', status: 'running',
+    cnpj: onlyDigits(cnpj), portal: federalPortal, context,
+    captureFederalAction: async (locator, options = {}) => {
+      const captured = await capturePdfFromClick(page, context, [locator], 30000, browser, options.stopWhen || null);
+      if (captured?.intermediate) return { ...captured, downloadDir };
+      if (captured?.download || captured?.pdfBuffer || captured?.captchaRequired) return { ...captured, downloadDir };
+      const recovered = await waitForPdfInDirectory(downloadDir, 5000);
+      return recovered ? { ...recovered, downloadDir } : null;
+    }
+  };
+  const landing = await waitForFederalLanding({ page, job, emit });
+  if (!landing.ready && landing.interactionRequired) {
+    emit({ type: 'human_action_required', portal: 'federal', message: landing.message });
+    await browser.waitForHumanResume(landing.message);
+  } else if (!landing.ready) {
+    throw new Error(landing.message);
+  }
+  const startedAt = Date.now();
+  const deadline = startedAt + 150000;
+  let newestCopyRequested = false;
+
+  while (Date.now() < deadline) {
+    if (page.isClosed()) throw new Error('A aba da Receita Federal foi fechada antes da emissão.');
+
+    const bodyBefore = await page.locator('body').innerText({ timeout: 2500 }).catch(() => '');
+    const portalError = classifyFederalPortalError(bodyBefore);
+    if (portalError) {
+      const diagnostic = await saveFederalErrorDiagnostic({ page, baseDir, cnpj, portalError });
+      emit({ type: 'portal_response_error', portal: 'federal', status: portalError.category, code: portalError.portalCode, occurrence: portalError.occurrence, message: portalError.message });
+      emit({ type: 'federal_portal_error_diagnostic', portal: 'federal', ...diagnostic, message: `Diagnóstico da resposta ${portalError.portalCode} salvo para análise.` });
+      const error = new Error(portalError.message);
+      error.code = portalError.category;
+      error.portalCode = portalError.portalCode;
+      throw error;
+    }
+
+    const captcha = await browser.captchaState(page).catch(() => ({ captcha_active: false, blocking: false }));
+    if (captcha.captcha_active && captcha.blocking) {
+      emit({ type: 'federal_captcha_wait', portal: 'federal', message: 'A consulta federal aguarda a validação humana no portal oficial.' });
+      const resumed = await browser.waitForCaptcha(
+        page,
+        'Resolva a verificação na página oficial da Receita e clique em Continuar na Central.',
+        federalPortal.captchaTimeout || 600000,
+        false,
+        true
+      );
+      if (!resumed) throw new Error('A verificação da Receita continua bloqueando a consulta.');
+      continue;
+    }
+
+    const emitted = [];
+    const result = await advanceIssuer(job, event => {
+      emitted.push(event);
+      emit({ ...event, portal: 'federal' });
+    });
+    if (result?.message) emit({ type: 'federal_flow_progress', portal: 'federal', stage: result.status || 'analisando', message: result.message });
+
+    if (result?.captured?.captchaRequired) continue;
+    if (result?.captured?.download || result?.captured?.pdfBuffer) {
+      const buffer = result.captured.pdfBuffer;
+      emit({ type: 'federal_pdf_capture_detected', portal: 'federal', method: result.captured.download ? 'download' : 'response', bytes: buffer?.length || 0, pdfHeader: buffer?.subarray(0, 8).toString('latin1') || '' });
+      return result.captured;
+    }
+    if (emitted.some(event => event.type === 'federal_latest_certificate_selected')) {
+      newestCopyRequested = true;
+      throw new Error('A Receita apresentou a certidão válida mais recente, mas não entregou um PDF após a solicitação da segunda via. Nenhum documento foi arquivado.');
+    }
+
+    if (result?.status === 'awaiting_user') {
+      emit({ type: 'human_action_required', portal: 'federal', message: result.message });
+      await browser.waitForHumanResume(result.message);
+      continue;
+    }
+
+    // The SPA updates the Angular component after each exact action. Give that
+    // transition a short window before asking the resolver for the next step.
+    await page.waitForTimeout(600);
+  }
+
+  if (newestCopyRequested) throw new Error('A Receita não concluiu o download da segunda via mais recente.');
+  throw new Error('A consulta federal excedeu o limite aguardando uma etapa da Receita. Confira a janela do portal; a certidão não foi marcada como emitida.');
+}
+
+async function saveFederalCapture({ capture, cnpj, baseDir, emit }) {
+  if (!capture?.download && !capture?.pdfBuffer) throw new Error('A Receita não forneceu o PDF da certidão.');
+  const dir = path.join(baseDir, 'data', 'certidoes', onlyDigits(cnpj), new Date().toISOString().slice(0, 10));
+  fs.mkdirSync(dir, { recursive: true });
+  const filePath = path.join(dir, 'CND FEDERAL.pdf');
+  if (capture.download) {
+    try {
+      await saveDownloadAsPdf(capture.download, filePath);
+    } catch (saveError) {
+      const recovered = capture.downloadDir ? await waitForPdfInDirectory(capture.downloadDir, 10000) : null;
+      if (!recovered) throw saveError;
+      fs.writeFileSync(filePath, recovered.pdfBuffer);
+      emit({ type: 'download_recovered', portal: 'federal', sourcePath: recovered.sourcePath, message: 'PDF recuperado da pasta controlada do Chrome após a captura normal do download falhar.' });
+    }
+  }
+  else if (looksLikePdf(capture.pdfBuffer)) fs.writeFileSync(filePath, capture.pdfBuffer);
+  else throw new Error('A resposta da Receita não é um PDF válido; nenhum arquivo foi arquivado.');
+  const rel = path.relative(path.join(baseDir, 'data'), filePath).split(path.sep).join('/');
+  emit({ type: 'downloaded', portal: 'federal', filePath, fileUrl: '/files/' + rel, message: 'PDF oficial da Receita capturado e salvo.' });
+  return { filePath };
 }
 
 async function captureExistingCertificate(page, context, config, emit) {
@@ -444,6 +947,13 @@ async function continueIssuanceFlow({page,context,browser,portal,baseDir,emit,ma
   const history=[];const seenServices=new Set();const attemptedActions=new Set();const priorLabels=new Set(priorActionLabels.map(normalText));let previousAction='emissão inicial';
   for(let step=1;step<=maxSteps;step++) {
     await page.waitForTimeout(800).catch(()=>{});
+    if (portal.key === 'estadual-ce') {
+      const responseError = classifyStateCePortalError(await page.locator('body').innerText().catch(() => ''));
+      if (responseError) {
+        emit({ type: 'portal_response_error', portal: portal.key, status: responseError.category, message: responseError.message });
+        return { history, status: 'PORTAL_RESPONSE_ERROR', responseError };
+      }
+    }
     // Aguarda respostas assíncronas do portal antes de classificar a etapa.
     const loading=await page.locator('text=/Aguarde|Carregando|Processando/i').count().catch(()=>0);
     if(loading){ await page.waitForTimeout(4000).catch(()=>{}); }
@@ -558,6 +1068,17 @@ async function runPortal({ portal, cnpj, browser, baseDir, emit }) {
   emit({ type: 'portal_opening', portal: portal.key, name: portal.name, url: portal.url });
   await page.goto(portal.url, { waitUntil: 'domcontentloaded', timeout: 60000 });
   await page.bringToFront().catch(() => {});
+  if (portal.key === 'federal') {
+    emit({ type: 'federal_flow_started', portal: 'federal', message: 'Executando o fluxo oficial da Receita: Pessoa Jurídica, cookies, CNPJ e Emitir Certidão.' });
+    const capture = await runFederalReceitaFlow({ page, browser, portal, cnpj, baseDir, emit });
+    return saveFederalCapture({ capture, cnpj, baseDir, emit });
+  }
+  if (portal.key === 'municipal') {
+    const manual = await waitForManualMunicipalCertificate({ page, browser, portal, cnpj, baseDir, emit });
+    if (!manual?.filePath) return null;
+    emit({ type: 'downloaded', portal: portal.key, filePath: manual.filePath, fileUrl: '/files/' + path.relative(path.join(baseDir, 'data'), manual.filePath).split(path.sep).join('/'), captureStage: manual.captureStage, message: 'Certidão municipal baixada pelo usuário e capturada pela Central.' });
+    return manual;
+  }
   await page.waitForTimeout(portal.key === 'municipal' ? 6000 : 1800);
   if (portal.key === 'municipal') {
     await page.getByText(/certid[aã]o\s+negativa.*tributos|certid[aã]o.*d[eé]bitos/i).first().waitFor({state:'visible',timeout:20000}).catch(() => {});
@@ -634,16 +1155,40 @@ async function runPortal({ portal, cnpj, browser, baseDir, emit }) {
     await page.waitForTimeout(action.waitMs || 2200);
   }
 
+  // The Receita's cookie notice appears after the initial issuance click. The
+  // active session runner must accept that exact official notice before
+  // interpreting the valid-certificate modal or the temporary response 023.
+  if (portal.key === 'federal') {
+    let cookieResult = await handleFederalCookies(page, { id: 'central-session', portal }, event => emit({ ...event, portal: 'federal' }));
+    if (cookieResult?.status === 'awaiting_user') {
+      if (typeof browser.waitForHumanResume !== 'function') throw new Error(cookieResult.message);
+      emit({ type: 'human_action_required', portal: 'federal', message: cookieResult.message });
+      await browser.waitForHumanResume(cookieResult.message);
+      if (page.isClosed()) throw new Error('A aba da Receita foi fechada durante a confirmação do aviso de cookies.');
+      cookieResult = await handleFederalCookies(page, { id: 'central-session', portal }, event => emit({ ...event, portal: 'federal' }));
+      if (cookieResult?.status === 'awaiting_user') throw new Error(cookieResult.message);
+    }
+  }
+
+  let download = null;
+  let pdfBuffer = null;
+  let controlledDownloadDir = null;
+  let federalCaptchaWasBlocking = false;
+  const completedActionLabels = [];
+
   // A Receita pode concluir a navegação com uma mensagem informando que os
   // dados são insuficientes para emissão online. Isso é uma pendência apenas
   // da certidão federal; não deve bloquear as demais etapas da fila.
   if (portal.key === 'federal') {
+    const existingCopy = await captureExistingFederalSecondCopy(page, browser.context, cnpj, browser, emit);
+    if (existingCopy?.download) download = existingCopy.download;
+    if (existingCopy?.pdfBuffer) pdfBuffer = existingCopy.pdfBuffer;
     const bodyText = await page.locator('body').innerText().catch(() => '');
-    if (/informa(?:ç|c)[õo]es dispon[ií]veis.*insuficientes para emitir/i.test(bodyText) ||
-        /dados.*insuficientes para emitir a certid[aã]o/i.test(bodyText)) {
+    if (!download && !pdfBuffer && (/informa(?:ç|c)[õo]es dispon[ií]veis.*insuficientes para emitir/i.test(bodyText) ||
+        /dados.*insuficientes para emitir a certid[aã]o/i.test(bodyText))) {
       throw new Error('A Receita Federal informou que os dados são insuficientes para emitir a certidão pela Internet. A Central seguirá para a próxima certidão.');
     }
-    const responseError = classifyFederalPortalError(bodyText);
+    const responseError = !download && !pdfBuffer ? classifyFederalPortalError(bodyText) : null;
     if (responseError) {
       emit({ type: 'portal_response_error', portal: 'federal', status: responseError.category, code: responseError.portalCode, occurrence: responseError.occurrence, message: responseError.message });
       const error = new Error(responseError.message);
@@ -655,25 +1200,6 @@ async function runPortal({ portal, cnpj, browser, baseDir, emit }) {
 
   // A Receita pode abrir o modal "Certidão Válida Encontrada" antes do CAPTCHA.
   // Se isso ocorrer, recupera a 2ª via e não entra na espera do CAPTCHA.
-  let download = null;
-  let pdfBuffer = null;
-  let controlledDownloadDir = null;
-  let federalCaptchaWasBlocking = false;
-  const completedActionLabels = [];
-  if (portal.key === 'federal') {
-    // The previous code opened the existing-certificate search, scrolled the
-    // results grid, and tried to print a second copy. That is not the action
-    // requested by this issuance flow: when the Receita offers both choices,
-    // the configured post-CAPTCHA action below selects "Emitir Nova Certidão".
-    const validCertificateNotice = page.getByText('Certidão Válida Encontrada', { exact: false });
-    for (let i = 0; i < await validCertificateNotice.count(); i++) {
-      if (await validCertificateNotice.nth(i).isVisible().catch(() => false)) {
-        emit({ type: 'federal_valid_certificate_found', portal: 'federal', message: 'A Receita encontrou uma certidão válida. A Central seguirá pela opção oficial de emitir nova certidão.' });
-        break;
-      }
-    }
-  }
-
   // Cada portal é concluído antes de iniciar o próximo. Para a Receita,
   // a etapa humana é obrigatória somente quando o fluxo realmente chegou ao CAPTCHA.
   if (!download && !pdfBuffer && portal.key === 'trabalhista') {
@@ -749,6 +1275,15 @@ async function runPortal({ portal, cnpj, browser, baseDir, emit }) {
     if (clicked) { completedActionLabels.push(action.name || ''); await page.waitForTimeout(action.waitMs || 2200); }
   }
 
+  // GRPFOR de Fortaleza apresenta uma confirmação de reimpressão depois do
+  // CAPTCHA. Capture essa etapa antes do resolvedor genérico: "Reimprimir
+  // Certidão" é a ação legítima para obter a cópia oficial existente.
+  if (!download && !pdfBuffer && portal.existingCertificate) {
+    const existing = await captureExistingCertificate(page, browser.context, portal.existingCertificate, emit);
+    if (existing?.download) download = existing.download;
+    if (existing?.pdfBuffer) pdfBuffer = existing.pdfBuffer;
+  }
+
   // A emissão pode abrir uma ou mais confirmações intermediárias depois da
   // ação inicial. Reavalia o DOM, modais, CAPTCHA e novas páginas até chegar a
   // um estado terminal, sem clicar em elementos fora do contexto da emissão.
@@ -757,15 +1292,15 @@ async function runPortal({ portal, cnpj, browser, baseDir, emit }) {
       page, context: browser.context, browser, portal, baseDir, emit, maxSteps: 8, priorActionLabels:completedActionLabels
     });
     if (continuation.pdfBuffer) pdfBuffer = continuation.pdfBuffer;
+    if (continuation.download) download = continuation.download;
+    if (continuation.status === 'PORTAL_RESPONSE_ERROR') {
+      const error = new Error(continuation.responseError.message);
+      error.code = continuation.responseError.category;
+      throw error;
+    }
     if (continuation.status === 'ESTADO_DESCONHECIDO') {
       throw new Error('ESTADO_DESCONHECIDO: o portal apresentou uma etapa não interpretada com segurança.');
     }
-  }
-
-  if (!download && !pdfBuffer && portal.existingCertificate) {
-    const existing = await captureExistingCertificate(page, browser.context, portal.existingCertificate, emit);
-    if (existing?.download) download = existing.download;
-    if (existing?.pdfBuffer) pdfBuffer = existing.pdfBuffer;
   }
 
   if (!download && !pdfBuffer) {
@@ -847,4 +1382,4 @@ async function runPortal({ portal, cnpj, browser, baseDir, emit }) {
   return { filePath };
 }
 
-module.exports = { runPortal, findSafeContinuation, findMunicipalCertificateService, continueIssuanceFlow, classifyFederalPortalError };
+module.exports = { runPortal, findSafeContinuation, findMunicipalCertificateService, continueIssuanceFlow, classifyFederalPortalError, classifyStateCePortalError, captureExistingCertificate, waitForManualMunicipalCertificate };

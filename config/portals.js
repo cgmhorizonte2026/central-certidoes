@@ -3,67 +3,24 @@ module.exports = [
     "key": "federal",
     "name": "Certidão Federal",
     "shortName": "Federal",
-    "url": "https://servicos.receitafederal.gov.br/servico/certidoes/",
+    "url": "https://servicos.receitafederal.gov.br/servico/certidoes/#/home/cnpj",
+    "allowedHosts": ["servicos.receitafederal.gov.br"],
     "verifyUrl": "https://solucoes.receita.fazenda.gov.br/Servicos/certidao/certaut/NIAutentic.asp?origem=pj",
     "humanCaptcha": "required",
     "captchaTimeout": 600000,
-    "preActions": [
-      {
-        "name": "Abrir emissão",
-        "selectors": [
-          "text=Iniciar"
-        ]
-      },
-      {
-        "name": "Selecionar Pessoa Jurídica",
-        "selectors": [
-          "text=Pessoa Jurídica"
-        ]
-      }
-    ],
+    "preActions": [],
     "selectors": {
       "cnpj": [
+        "input[name=\"niContribuinte\"]",
         "input[name=\"cnpj\"]",
         "input[id*=\"cnpj\" i]",
         "input[placeholder*=\"CNPJ\" i]",
         "input[name*=\"cpfcnpj\" i]"
       ]
     },
-    "beforeCaptchaActions": [
-      {
-        "name": "Emitir Certidão",
-        "selectors": [
-          "button:has-text(\"Emitir Certidão\")",
-          "a:has-text(\"Emitir Certidão\")",
-          "input[type=button][value*=\"Emitir Certidão\" i]",
-          "input[type=submit][value*=\"Emitir Certidão\" i]",
-          "text=Emitir Certidão",
-          "text=Emitir certidão"
-        ],
-        "waitMs": 2500
-      }
-    ],
-    "afterCaptchaActions": [
-      {
-        "name": "Emitir certidão",
-        "selectors": [
-          "button:has-text(\"Emitir Nova Certidão\")",
-          "a:has-text(\"Emitir Nova Certidão\")",
-          "input[type=button][value*='Emitir Nova Certidão' i]",
-          "input[type=submit][value*='Emitir Nova Certidão' i]"
-        ],
-        "captureDownload": true,
-        "downloadTimeout": 30000,
-        "waitMs": 2200
-      }
-    ],
-    "downloadButtons": [
-      "text=Baixar",
-      "text=Download",
-      "text=Imprimir",
-      "text=Certidão",
-      "text=Gerar"
-    ]
+    "beforeCaptchaActions": [],
+    "afterCaptchaActions": [],
+    "downloadButtons": []
   },
   {
     "key": "fgts",

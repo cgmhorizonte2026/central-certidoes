@@ -25,30 +25,32 @@ function municipalPortal(company) {
   const code = String(company?.municipio_codigo_ibge || company?.codigo_municipio_ibge || '') || municipalityCodes.get(normalize(company?.municipio));
   const entry = municipal[code];
   if (!entry) return null;
+  const allowedHosts = entry.allowedHosts?.length ? entry.allowedHosts : [new URL(entry.url).hostname];
   if (code === '2300507') return {
     key:'municipal', name:'Municipal · Alcântaras', shortName:'Municipal', url:entry.url,
-    verifyUrl:entry.verifyUrl, selectors:{cnpj:['input[name="cpfCnpj"]','input[id$="_cpfCnpj"]']},
+    verifyUrl:entry.verifyUrl, allowedHosts, selectors:{cnpj:['input[name="cpfCnpj"]','input[id$="_cpfCnpj"]']},
     humanCaptcha:false, preActions:[], beforeCaptchaActions:[],
     afterCaptchaActions:[{name:'Realizar Consulta',selectors:['button[type="submit"]:has-text("Realizar Consulta")','button:has-text("Realizar Consulta")'],captureDownload:true,downloadTimeout:15000,waitMs:1800}],
     downloadButtons:['text=Reimprimir Certidão','text=Imprimir','text=Baixar','text=Download','text=PDF']
   };
   if (code === '2304400') return {
     key:'municipal', name:'Municipal · Fortaleza', shortName:'Municipal', url:entry.url,
-    verifyUrl:entry.verifyUrl || entry.sourceUrl || entry.url,
+    verifyUrl:entry.verifyUrl || entry.sourceUrl || entry.url, allowedHosts,
     selectors:{cnpj:['#pesquisaForm\\:cnpjPessoaDec\\:cnpj','input[name="pesquisaForm:cnpjPessoaDec:cnpj"]','input[alt="cnpj" i]']},
     preActions:[{name:'Selecionar Pessoa Jurídica / CNPJ',selectors:['#pesquisaForm\\:tipoPessoaDecorate\\:j_id358\\:1','input[name="pesquisaForm:tipoPessoaDecorate:j_id358"][value="J"]','label:has-text("Jurídica")'],waitMs:1800,required:true}],
     humanCaptcha:'required', captchaTimeout:600000, beforeCaptchaActions:[],
     afterCaptchaActions:[{name:'Emitir Certidão Municipal',selectors:['#pesquisaForm\\:btnEmitir','input[name="pesquisaForm:btnEmitir"]','input[value="Emitir"]'],captureDownload:true,downloadTimeout:5000,waitMs:1200}],
-    existingCertificate:{container:'form#modalReimpressaoForm',reprintSelectors:['form#modalReimpressaoForm input[value*="Reimprimir Certid" i]','form#modalReimpressaoForm input[type="submit"]','text=Reimprimir Certidão']},
+    existingCertificate:{container:'form#modalReimpressaoForm',reprintSelectors:['form#modalReimpressaoForm button:has-text("Reimprimir Certidão"), form#modalReimpressaoForm [role="button"]:has-text("Reimprimir Certidão"), form#modalReimpressaoForm input[value*="Reimprimir Certid" i]']},
     downloadButtons:['input[value*="Reimprimir Certid" i]','text=Reimprimir Certidão','text=Baixar','text=Download','text=Imprimir','text=PDF']
   };
   const preActions = code === '2305233' ? [{ name:'Abrir Certidão de Contribuinte', selectors:['a:has-text("Certidão de Contribuinte")','text=Certidão de Contribuinte'], waitMs:1500, required:true }] : [];
-  return { key:'municipal', name:entry.name, shortName:'Municipal', url:entry.url, verifyUrl:entry.verifyUrl || entry.sourceUrl || entry.url, selectors, humanCaptcha:false, preActions, beforeCaptchaActions:[], afterCaptchaActions:[], downloadButtons:['text=Emitir certidões','text=Emitir CND','text=Certidão Negativa','text=Imprimir','text=Baixar','text=PDF'] };
+  return { key:'municipal', name:entry.name, shortName:'Municipal', url:entry.url, verifyUrl:entry.verifyUrl || entry.sourceUrl || entry.url, allowedHosts, selectors, humanCaptcha:false, preActions, beforeCaptchaActions:[], afterCaptchaActions:[], downloadButtons:['text=Emitir certidões','text=Emitir CND','text=Certidão Negativa','text=Imprimir','text=Baixar','text=PDF'] };
 }
 
 function discoveredMunicipalPortal(company, record) {
   if (!record || record.status !== 'PORTAL_ENCONTRADO') return null;
-  const common={key:'municipal',name:`Municipal · ${company.municipio}`,shortName:'Municipal',url:record.certidao_url,verifyUrl:record.certidao_url,provider:record.provider,resolutionStatus:record.status,sourceUrl:record.fonte};
+  const allowedHosts=record.allowedHosts?.length?record.allowedHosts:[new URL(record.certidao_url).hostname];
+  const common={key:'municipal',name:`Municipal · ${company.municipio}`,shortName:'Municipal',url:record.certidao_url,verifyUrl:record.certidao_url,allowedHosts,provider:record.provider,resolutionStatus:record.status,sourceUrl:record.fonte};
   if(record.provider==='fisco-web')return {...common,selectors:{cnpj:['#cnpjcpf','input[name="cpf_cnpj"]','input[placeholder*="CPF/CNPJ" i]']},preActions:[{name:'Selecionar Certidão de Contribuinte',selectors:['input[name="tipo_certidao"][value="contribuinte"]','label:has-text("Certidão negativa/positiva de Contribuinte")'],required:true,waitMs:500}],humanCaptcha:false,beforeCaptchaActions:[],afterCaptchaActions:[{name:'Emitir Certidão',selectors:['button[type="submit"]:has-text("Emitir Certidão")','button:has-text("Emitir Certidão")'],captureDownload:true,downloadTimeout:20000,waitMs:1500}],downloadButtons:['text=Baixar','text=Imprimir','text=Download','text=PDF']};
   if(record.provider==='trimap')return {...common,selectors:{cnpj:['input[name="cpfCnpj"]','input[id$="_cpfCnpj"]']},humanCaptcha:false,preActions:[],beforeCaptchaActions:[],afterCaptchaActions:[{name:'Realizar Consulta',selectors:['button:has-text("Realizar Consulta")'],captureDownload:true,downloadTimeout:15000,waitMs:1800}],downloadButtons:['text=Reimprimir Certidão','text=Imprimir','text=Baixar','text=PDF']};
   const providerAdapter = adapterFor(record.provider, common, selectors);

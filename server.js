@@ -155,7 +155,12 @@ function runBoundedOperation(stage, timeoutMs, operation) {
   return runBoundedStep({ abortController: new AbortController() }, stage, timeoutMs, operation);
 }
 
-app.get('/api/health', (_, res) => res.json({ ok: true, version: '2.9.3.11' }));
+app.get('/api/health', (_, res) => res.json({
+  ok: true,
+  version: '2.9.3.11',
+  instancePath: path.resolve(__dirname),
+  processId: process.pid
+}));
 app.get('/api/portals', (_, res) => res.json(portals));
 app.get('/api/portal/:cnpj/:key', async (req,res,next) => {
   try {
@@ -289,7 +294,7 @@ function persistentPdfUrl(cnpj, relativePath) {
   return `/archive-files/${onlyDigits(cnpj)}/${safe}`;
 }
 
-function writeArchive(cnpj, portalKey, sourceFilePath, parsed, captureStage) {
+function writeArchive(cnpj, portalKey, sourceFilePath, parsed, captureStage, manualValidation = null) {
   const digits = onlyDigits(cnpj);
   const dateDir = new Date().toISOString().slice(0, 10);
   const selectedStorage = ensureCompanyArchiveDirectory(archiveStorage.root, defaultArchiveRoots(STORAGE_ROOT), digits, dateDir);
@@ -324,6 +329,7 @@ function writeArchive(cnpj, portalKey, sourceFilePath, parsed, captureStage) {
     viewUrl: `/api/archive/${digits}/${key}/pdf`,
     downloadUrl: `/api/archive/${digits}/${key}/download`,
     fileName,
+    ...(manualValidation ? { source: 'manual_validated_by_operator', validation: manualValidation } : { source: 'official_portal_capture' }),
     archivedAt: new Date().toISOString()
   };
   const indexFile = archivePath(cnpj);
@@ -518,6 +524,33 @@ app.post('/api/session/:id/resume', (req, res) => {
   res.json({ ok: true });
 });
 
+app.post('/api/session/:id/municipal-pdf', express.raw({ type: 'application/pdf', limit: '15mb' }), async (req, res, next) => {
+  try {
+    const session = sessions.get(req.params.id);
+    if (!session) return res.status(404).json({ error: 'Sessão não encontrada.' });
+    if (sessionRegistry.activeId !== session.id || session.status !== 'running' || session.currentPortal !== 'municipal' || typeof session.browserManager?.acceptManualMunicipalPdf !== 'function') {
+      return res.status(409).json({ error: 'A consulta municipal não está aguardando um PDF nesta sessão.' });
+    }
+    if (req.get('X-Official-Validation') !== 'confirmed') return res.status(403).json({ error: 'Confirme que conferiu o código no portal oficial antes de anexar.' });
+    const code = String(req.get('X-Certificate-Code') || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+    if (code.length < 4) return res.status(400).json({ error: 'Informe o código de autenticação da certidão.' });
+    if (!Buffer.isBuffer(req.body) || req.body.subarray(0, 5).toString('ascii') !== '%PDF-') return res.status(400).json({ error: 'Selecione um arquivo PDF válido.' });
+
+    let text = '';
+    try { text = String((await pdfParse(req.body)).text || ''); }
+    catch { return res.status(422).json({ error: 'Não foi possível ler o PDF. Nenhum documento foi anexado.' }); }
+    const normalizedText = text.toUpperCase().replace(/[^A-Z0-9]/g, '');
+    if (!normalizedText.includes(onlyDigits(session.cnpj))) return res.status(422).json({ error: 'O CNPJ do PDF não corresponde à empresa desta consulta.' });
+    if (!normalizedText.includes(code)) return res.status(422).json({ error: 'O código informado não aparece no PDF. Confira o arquivo e o código no portal oficial.' });
+    if (!/prefeitura|municipal|tributos municipais|certid[aã]o negativa/i.test(text)) return res.status(422).json({ error: 'O documento não apresenta evidência textual de certidão municipal.' });
+
+    const accepted = await session.browserManager.acceptManualMunicipalPdf({ buffer: req.body, code });
+    if (!accepted) return res.status(409).json({ error: 'O PDF não foi aceito pela sessão. Confira se ela continua aberta e tente novamente.' });
+    emit(session.id, { type: 'manual_municipal_pdf_accepted', portal: 'municipal', stage: 'emissao_municipal_manual', bytes: req.body.length, codeMatched: true, cnpjMatched: true, message: 'PDF municipal conferido pelo código e CNPJ, recebido na sessão e encaminhado para arquivamento.' });
+    res.status(202).json({ ok: true, message: 'PDF recebido. A Central está arquivando a certidão municipal.' });
+  } catch (error) { next(error); }
+});
+
 app.post('/api/session/:id/focus', async (req, res) => {
   const s = sessions.get(req.params.id);
   if (!s) return res.status(404).json({ error: 'Sessão não encontrada.' });
@@ -533,21 +566,62 @@ app.post('/api/session/:id/focus', async (req, res) => {
   }
 });
 
-app.post('/api/session/:id/stop', (req, res) => {
-  const s = sessions.get(req.params.id);
-  if (!s) return res.status(404).json({ error: 'Sessão não encontrada.' });
-  if (!sessionRegistry.cancel(req.params.id)) return res.status(409).json({ error: 'A consulta já foi encerrada.' });
-  emit(req.params.id, { type: 'stopped', stage: s.currentStage || '', cause: 'USER_CANCELLED', message: 'Consulta interrompida pelo usuário.' });
+function stopActiveSession(id) {
+  const s = sessions.get(id);
+  if (!s || !sessionRegistry.cancel(id)) return null;
+  emit(id, { type: 'stopped', stage: s.currentStage || '', cause: 'USER_CANCELLED', message: 'Consulta interrompida pelo usuário.' });
   s.completeEventSent = true;
-  emit(req.params.id, { type: 'complete', status: 'stopped', failures: s.failures || [] });
+  emit(id, { type: 'complete', status: 'stopped', failures: s.failures || [] });
   s.completedAt = new Date().toISOString();
-  res.json({ ok: true });
   const manager = s.browserManager;
   manager?.resume();
   if (manager) {
     if (browserManager === manager) browserManager = null;
     manager.close().catch(error => console.warn(`[SESSION] close after stop: ${error.message}`));
   }
+  return s;
+}
+
+// This route lets a browser recover/cancel a session even if its tab was
+// refreshed and the client no longer has the session ID in memory.
+app.get('/api/session/active', (req, res) => {
+  const id = sessionRegistry.activeId;
+  const s = id && sessions.get(id);
+  if (!id || !s || ['done', 'partial', 'error', 'stopped'].includes(s.status)) {
+    if (id) sessionRegistry.release(id);
+    return res.json({ active: false });
+  }
+  res.json({
+    active: true,
+    sessionId: s.id,
+    cnpj: s.cnpj,
+    razaoSocial: s.razaoSocial || '',
+    certificateKey: s.certificateKey || '',
+    status: s.status,
+    currentStage: s.currentStage || '',
+    portals: s.portals || sessionPortalSummary(s.certificateKey),
+    events: s.events || [],
+    failures: s.failures || [],
+    startedAt: s.startedAt || null
+  });
+});
+
+app.post('/api/session/active/stop', (req, res) => {
+  const id = sessionRegistry.activeId;
+  if (!id) return res.json({ ok: true, stopped: false, message: 'Não há consulta ativa.' });
+  const stopped = stopActiveSession(id);
+  if (!stopped) {
+    sessionRegistry.release(id);
+    return res.json({ ok: true, stopped: false, message: 'A sessão ativa já havia sido encerrada.' });
+  }
+  res.json({ ok: true, stopped: true, sessionId: id });
+});
+
+app.post('/api/session/:id/stop', (req, res) => {
+  const s = sessions.get(req.params.id);
+  if (!s) return res.status(404).json({ error: 'Sessão não encontrada.' });
+  if (!stopActiveSession(req.params.id)) return res.status(409).json({ error: 'A consulta já foi encerrada.' });
+  res.json({ ok: true });
 });
 
 app.get('/api/session/:id', (req, res) => {
@@ -696,7 +770,7 @@ async function runSession(id) {
         try {
           const buffer = fs.readFileSync(result.filePath);
           const parsed = parseCert((await pdfParse(buffer)).text);
-          const archived = writeArchive(s.cnpj, portal.key, result.filePath, parsed, result.captureStage);
+          const archived = writeArchive(s.cnpj, portal.key, result.filePath, parsed, result.captureStage, result.manualValidation || null);
           emit(id, { type: 'portal_done', portal: portal.key, filePath: archived.filePath, fileUrl: archived.fileUrl });
           emit(id, { type: 'pdf_archived', portal: portal.key, ...archived });
           emit(id, { type: 'pdf_parsed', portal: portal.key, parsed, filePath: archived.filePath, fileUrl: archived.fileUrl, viewUrl: archived.viewUrl, downloadUrl: archived.downloadUrl, fileName: archived.fileName });
