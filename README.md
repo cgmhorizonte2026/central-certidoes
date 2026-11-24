@@ -1,8 +1,29 @@
-# Central de Certidões v2.9.3.2
+# Central de Certidões v2.9.4.4
 
-Correção funcional baseada no ZIP v2.9.3.1. Os arquivos automation/portalRunner.js, automation/browser.js e config/portals.js permanecem intactos. Não foram desenvolvidas novas automações.
+Consulta municipal com aprendizado por demonstração, captura automática do PDF e conclusão pelo botão Continuar. Municípios sem roteiro começam em modo manual; roteiros salvos usam o CNPJ atual e pausam para CAPTCHA sem reiniciar a página. Veja [instruções e limites](docs/APRENDIZADO-MUNICIPAL.md).
 
-## Instalação para teste
+O botão **Parar** cancela a sessão ativa, fecha somente suas abas de automação e libera a fila para uma nova consulta, sem aguardar o CAPTCHA. PDFs já arquivados são preservados.
+
+A captura de **Imprimir** é compartilhada entre municípios: usa o PDF original quando disponível, ou gera um PDF da versão de impressão da página, popup ou iframe. Listagens e páginas de consulta não são aceitas como certidão final.
+
+Validação: `npm run test:municipal`, `npm run test:print` e `npm run test:stop`. Dependências Express 4 atualizadas com correções de segurança. Os demais órgãos mantêm suas automações existentes.
+
+A versão 2.9.4.4 corrige a rejeição de certidões positivas com efeito de negativa cujo texto também menciona certidão negativa, como no PDF de Fortaleza. A classificação específica prevalece sem remover as verificações de CNPJ, tipo municipal e documento final.
+
+## Versão oficial 2.9.4.4
+
+- Consulta de optantes do Simples Nacional e SIMEI, com comprovante PDF e prazo interno de reconsulta de 30 dias.
+- Relatório de uma página com identidade visual de Horizonte, tabela separada para Simples/SIMEI e identificação da origem dos documentos.
+- Número da certidão e código de verificação extraídos separadamente. Campos ausentes ou ambíguos exigem conferência.
+- Isolamento das abas por consulta e validação do CNPJ e órgão antes de arquivar ou reutilizar documentos.
+- Identificador da captura, hash SHA-256 e registro de origem; anexos manuais não recebem comprovação automática de origem oficial.
+- Dados extraídos somente para leitura, ações Anexar/Substituir e navegação entre cards e visualização.
+
+Execute `npm run test:regression` antes de alterações serem disponibilizadas. Os testes automatizados usam cenários controlados e não garantem disponibilidade nem estabilidade dos portais externos.
+
+Esta versão é local, para Windows com Node.js e Google Chrome. Não está preparada para exposição pública à internet ou múltiplos usuários simultâneos.
+
+## Instalação
 1. Encerre o servidor antigo sem apagar sua pasta.
 2. Extraia este ZIP em uma nova pasta e execute INICIAR-CENTRAL.bat. Na primeira execução, o iniciador instala as dependências npm caso necessário.
 3. Abra http://localhost:3030 no MESMO navegador e endereço usados anteriormente; o histórico e as conferências existentes são vinculados à origem do navegador.

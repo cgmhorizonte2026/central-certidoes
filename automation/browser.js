@@ -5,13 +5,32 @@ const { execFile } = require('child_process');
 
 class BrowserManager {
   constructor(emit) {
-    this.emit = emit;
+    this.emit = event=>{if(!this.cancelled)emit(event);};
+    this.controller = new AbortController();
+    this.signal = this.controller.signal;
+    this.ownedPages = new Set();
     this.browser = null;
     this.context = null;
     this.page = null;
     this.resumeResolver = null;
     this.connectedToExistingChrome = false;
     this.debugPort = 9222;
+  }
+
+  throwIfCancelled() { if(this.signal.aborted)throw this.signal.reason; }
+  abortable(promise) {
+    this.throwIfCancelled();
+    return new Promise((resolve,reject)=>{
+      const cancel=()=>reject(this.signal.reason);
+      this.signal.addEventListener('abort',cancel,{once:true});
+      Promise.resolve(promise).then(resolve,reject).finally(()=>this.signal.removeEventListener('abort',cancel));
+    });
+  }
+  own(page) {
+    if(this.cancelled){page.close({runBeforeUnload:false}).catch(()=>{});return;}
+    if(this.ownedPages.has(page))return;
+    this.ownedPages.add(page);
+    page.on('popup',popup=>this.own(popup));
   }
 
   chromePath() {
@@ -27,19 +46,24 @@ class BrowserManager {
   async waitForCdp(timeoutMs = 15000) {
     const started = Date.now();
     while (Date.now() - started < timeoutMs) {
+      this.throwIfCancelled();
       try {
-        this.browser = await chromium.connectOverCDP(`http://127.0.0.1:${this.debugPort}`);
+        const connected = await chromium.connectOverCDP(`http://127.0.0.1:${this.debugPort}`,{timeout:5000});
+        if(this.cancelled){await connected.close().catch(()=>{});this.throwIfCancelled();}
+        this.browser = connected;
         this.connectedToExistingChrome = true;
         this.emit({ type: 'browser_connected', message: 'Conectado ao Google Chrome da Central.' });
         return true;
       } catch (_) {
-        await new Promise(r => setTimeout(r, 350));
+        this.throwIfCancelled();
+        await this.abortable(new Promise(r => setTimeout(r, 350)));
       }
     }
     return false;
   }
 
   async startChromeWithDebugging() {
+    this.throwIfCancelled();
     const exe = this.chromePath();
     if (!exe) throw new Error('Google Chrome não foi encontrado no Windows.');
 
@@ -65,6 +89,7 @@ class BrowserManager {
   }
 
   async ensure() {
+    this.throwIfCancelled();
     if (this.browser && !this.browser.isConnected()) this.browser=this.context=this.page=null;
     if (!this.browser) {
       // Primeiro tenta conectar a uma instância de Chrome já iniciada com CDP.
@@ -73,8 +98,10 @@ class BrowserManager {
       }
     }
 
+    this.throwIfCancelled();
     const contexts = this.browser.contexts();
     this.context = contexts[0] || await this.browser.newContext({ acceptDownloads: true, viewport: null });
+    this.throwIfCancelled();
     const pages = this.context.pages().filter(p => !p.isClosed());
     this.page = pages.find(p => /receitafederal|caixa\.gov\.br|tst\.jus\.br|sefaz\.ce\.gov\.br/i.test(p.url())) || pages[0] || await this.context.newPage();
     await this.page.bringToFront().catch(() => {});
@@ -83,25 +110,40 @@ class BrowserManager {
 
   async newPortalPage() {
     await this.ensure();
-    this.page = await this.context.newPage();
+    this.throwIfCancelled();
+    const page = await this.context.newPage();
+    this.own(page);this.throwIfCancelled();
+    this.page = page;
     await this.page.bringToFront().catch(() => {});
     return this.page;
   }
 
-  async close() {
-    this.resumeResolver?.();
-    this.resumeResolver = null;
-    // Nunca fecha o Chrome do usuário. Apenas desconecta a automação.
-    try { await this.browser?.close(); } catch (_) {}
-    this.browser = this.context = this.page = null;
-    this.connectedToExistingChrome = false;
+  close() {
+    if(this.closing)return this.closing;
+    this.cancelled=true;
+    this.controller.abort(Object.assign(new Error('Consulta cancelada pelo usuário.'),{code:'SESSION_CANCELLED'}));
+    this.resumeResolver=null;
+    const connection=this.browser;
+    const pages=[...this.ownedPages];this.ownedPages.clear();
+    this.browser=this.context=this.page=null;
+    this.connectedToExistingChrome=false;
+    this.closing=(async()=>{
+      // Only this session's tabs/popups, never other user's browser tabs.
+      let timer;
+      await Promise.race([Promise.allSettled(pages.map(page=>page.close({runBeforeUnload:false}))),new Promise(resolve=>{timer=setTimeout(resolve,1000);})]);
+      clearTimeout(timer);
+      await connection?.close().catch(()=>{});
+    })();
+    return this.closing;
   }
 
   async waitForHumanResume(message) {
-    this.emit({ type: 'human_action_required', message });
-    await new Promise(resolve => { this.resumeResolver = resolve; });
-    this.resumeResolver = null;
-    this.emit({ type: 'resumed' });
+    this.throwIfCancelled();
+    this.emit({type:'human_action_required',message});
+    try { await this.abortable(new Promise(resolve=>{this.resumeResolver=resolve;})); }
+    finally { this.resumeResolver=null; }
+    this.throwIfCancelled();
+    this.emit({type:'resumed'});
   }
 
   async captchaState(page) {
@@ -137,8 +179,15 @@ class BrowserManager {
     } catch (_) { return false; }
   }
 
-  async waitForCaptcha(page, message, timeoutMs = 600000, force = false) {
+  async waitForCaptcha(...args) {
+    this.throwIfCancelled();
+    return this.abortable(this.waitForCaptchaLoop(...args));
+  }
+
+  async waitForCaptchaLoop(page, message, timeoutMs = 600000, force = false) {
+    this.throwIfCancelled();
     let seenCaptcha = (await this.captchaState(page)).captcha_active;
+    this.throwIfCancelled();
     if (!seenCaptcha && !force) {
       this.emit({ type: 'no_captcha_detected' });
       return true;
@@ -153,10 +202,12 @@ class BrowserManager {
 
     while (Date.now() - started < timeoutMs) {
       const presentState = await this.captchaState(page);
+      this.throwIfCancelled();
       const presentNow = presentState.captcha_active && presentState.blocking;
       if (presentNow) seenCaptcha = true;
 
       if (seenCaptcha && await this.captchaSolved(page)) {
+        this.throwIfCancelled();
         this.emit({ type: 'captcha_solved' });
         await page.waitForTimeout(1200);
         await page.bringToFront().catch(() => {});
@@ -181,7 +232,7 @@ class BrowserManager {
     throw new Error('Tempo limite aguardando a conclusão manual do CAPTCHA.');
   }
 
-  resume() { if (this.resumeResolver) this.resumeResolver(); }
+  resume() { if (!this.cancelled && this.resumeResolver) this.resumeResolver(); }
 }
 
 module.exports = { BrowserManager };

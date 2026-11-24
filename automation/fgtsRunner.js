@@ -1,3 +1,4 @@
+const { checkCancelled } = require('./cancellation');
 const fs = require('fs');
 const path = require('path');
 
@@ -32,6 +33,7 @@ async function waitForPdfInDirectory(dir, timeout = 60000) {
   const started = Date.now();
   const observed = new Map();
   while (Date.now() - started < timeout) {
+    checkCancelled();
     let names = [];
     try { names = fs.readdirSync(dir); } catch (_) {}
     const candidates = names
@@ -167,7 +169,7 @@ async function runFgts({ portal, cnpj, browser, baseDir, emit }) {
   const dir = path.join(baseDir, 'data', 'certidoes', digits, new Date().toISOString().slice(0, 10));
   fs.mkdirSync(dir, { recursive: true });
   const filePath = path.join(dir, 'CRF FGTS.pdf');
-  fs.writeFileSync(filePath, pdf);
+  checkCancelled();fs.writeFileSync(filePath, pdf);
   emit({
     type: 'downloaded',
     portal: 'fgts',
@@ -175,7 +177,7 @@ async function runFgts({ portal, cnpj, browser, baseDir, emit }) {
     fileUrl: '/files/' + path.relative(path.join(baseDir, 'data'), filePath).split(path.sep).join('/'),
     message: 'PDF oficial capturado pela impressão do CRF FGTS.'
   });
-  return { filePath, captureStage: 'fgts-print-view' };
+  return { filePath, captureStage: 'fgts-print-view', provenance:{source:'controlled_browser',officialPortal:require('./capture-provenance').officialUrl(page.url(),portal),sourceUrl:page.url(),captureMethod:'official_print_view',capturedAt:new Date().toISOString()} };
 }
 
 module.exports = { runFgts };

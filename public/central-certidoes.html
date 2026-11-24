@@ -382,6 +382,9 @@ header.top{border:0!important;padding:0 0 18px!important;margin-bottom:14px!impo
 @media(max-width:700px){.app-sidebar{display:none}.wrap{margin-left:0!important;width:100%;padding:14px!important}.grid{grid-template-columns:1fr!important}.modern-hero{padding:20px}.cnpj-row>*{width:100%!important}.v2-grid{grid-template-columns:1fr!important}}
 @media print{.app-sidebar,.modern-hero{display:none!important}.wrap{margin:0!important;width:100%!important}}
 </style>
+<link rel="stylesheet" href="/certificate-report.css">
+<script src="/simples-review.js"></script>
+<script src="/certificate-report.js"></script>
 </head>
 <body>
 <aside class="app-sidebar">
@@ -393,7 +396,7 @@ header.top{border:0!important;padding:0 0 18px!important;margin-bottom:14px!impo
     <div class="side-link"><span>↗</span> Relatórios</div>
     <div class="side-link"><span>⚙</span> Configurações</div>
   </nav>
-  <div class="side-foot"><b>CONTROLADORIA GERAL</b><br>Município de Horizonte/CE<br><br>Central de Certidões · v2.9.3.5</div>
+  <div class="side-foot"><b>CONTROLADORIA GERAL</b><br>Município de Horizonte/CE<br><br>Central de Certidões · v2.9.4.4</div>
 </aside>
 <div class="wrap">
 
@@ -460,6 +463,7 @@ header.top{border:0!important;padding:0 0 18px!important;margin-bottom:14px!impo
 if(window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
 
 const ORGAOS = [
+  {key:'simples',eyebrow:'Receita Federal',title:'Simples Nacional / SIMEI',url:'https://consopt.www8.receita.fazenda.gov.br/consultaoptantes',verifyUrl:'https://consopt.www8.receita.fazenda.gov.br/consultaoptantes'},
   {
     key:'federal',
     eyebrow:'Receita Federal / PGFN',
@@ -623,7 +627,7 @@ function buildCards(){
       <div class="card-head">
         <div class="card-eyebrow">${o.eyebrow}</div>
         <div class="card-title">${o.title}</div>
-        ${o.semPortalFixo ? `<div style="font-size:12px;color:var(--ink-soft);margin-top:6px;">Cada prefeitura tem seu próprio site — não há um portal único para linkar aqui. Emita direto no site do município da empresa e anexe o PDF abaixo; a conferência final é manual.</div>` : ''}
+        ${o.semPortalFixo ? `<div style="font-size:12px;color:var(--ink-soft);margin-top:6px;">A Central identifica o portal do município. Na primeira consulta, emita e baixe o PDF na janela aberta e clique em Continuar. O roteiro será salvo para as próximas empresas.</div>` : ''}
       </div>
       <div class="card-body">
         ${o.pedirMunicipio ? `<input type="text" id="municipio-${o.key}" placeholder="Município emissor (ex: Horizonte/CE)" style="font-family:'Inter',sans-serif;font-size:13px;padding:8px 10px;border:1px solid #C9C2AE;border-radius:3px;" onchange="manualUpdate('${o.key}')">` : ''}
@@ -641,7 +645,7 @@ function buildCards(){
           <div class="manual-label">Situação e validade (confira ou ajuste)</div>
           <select id="sel-${o.key}" onchange="manualUpdate('${o.key}')">
             <option value="">— não verificado —</option>
-            <option value="negativa">Negativa</option>
+            <option value="optante">Optante pelo Simples</option><option value="nao_optante">Não optante pelo Simples</option><option value="negativa">Negativa</option>
             <option value="positiva_efeito_negativa">Positiva c/ efeito de negativa</option>
             <option value="positiva">Positiva (irregular)</option>
           </select>
@@ -812,7 +816,7 @@ async function salvarNoHistorico(){
     orgaos: {}
   };
   ORGAOS.forEach(o=>{
-    if(state[o.key]) registro.orgaos[o.key] = { status: state[o.key].status, validade: state[o.key].validade, numero: state[o.key].numero, verificado: state[o.key].verificado, municipio: state[o.key].municipio, pdfUrl: state[o.key].pdfUrl || '', pdfNome: state[o.key].pdfNome || '', viewUrl:state[o.key].viewUrl||'', downloadUrl:state[o.key].downloadUrl||'', source:state[o.key].source||'', archivedAt:state[o.key].archivedAt||'' };
+    if(state[o.key]) registro.orgaos[o.key] = { dataConsulta:state[o.key].dataConsulta||'',simei:state[o.key].simei||'',status: state[o.key].status, validade: state[o.key].validade, numero: state[o.key].numero, verificado: state[o.key].verificado, municipio: state[o.key].municipio, pdfUrl: state[o.key].pdfUrl || '', pdfNome: state[o.key].pdfNome || '', viewUrl:state[o.key].viewUrl||'', downloadUrl:state[o.key].downloadUrl||'', source:state[o.key].source||'', archivedAt:state[o.key].archivedAt||'' };
   });
   try{
     await window.storage.set('empresa:' + digits, JSON.stringify(registro), false);
@@ -920,6 +924,8 @@ function abrirDoHistorico(digits){
 
 function statusLabel(status){
   return {
+    'optante':'OPTANTE PELO SIMPLES NACIONAL',
+    'nao_optante':'NÃO OPTANTE PELO SIMPLES NACIONAL',
     'negativa': 'NEGATIVA',
     'positiva_efeito_negativa': 'POSITIVA C/ EFEITO DE NEGATIVA',
     'positiva': 'POSITIVA — IRREGULAR',
@@ -1108,7 +1114,7 @@ window.addEventListener('DOMContentLoaded',()=>{
 <script id="v2-client">
 (() => {
   const $ = id => document.getElementById(id);
-  let sessionId = null, poll = null;
+  let sessionId = null, poll = null, municipalActive = false;
   const steps = {};
   const processedPdfUrls = new Set();
   function digits(v){return String(v||'').replace(/\D/g,'')}
@@ -1118,13 +1124,35 @@ window.addEventListener('DOMContentLoaded',()=>{
   async function api(url,opt={}){ const r=await fetch(url,{headers:{'Content-Type':'application/json'},...opt}); const j=await r.json(); if(!r.ok)throw new Error(j.error||'Erro'); return j; }
   async function startConsultation(certificateKey=''){
     const cnpj=digits($('cnpj')?.value); if(cnpj.length!==14){alert('Informe um CNPJ válido com 14 dígitos.');return;}
+    if($('btnConsultarTodas').disabled)return;
+    clearInterval(poll);sessionId=crypto.randomUUID();municipalActive=false;
+    const startingId=sessionId;
     $('btnConsultarTodas').disabled=true; $('btnParar').disabled=false; $('btnContinuar').disabled=true; $('v2Human').classList.add('v2-hidden'); $('v2Log').textContent='';
-    try{ const data=await api('/api/session',{method:'POST',body:JSON.stringify({cnpj,razaoSocial:$('razaoSocial')?.value||'',certificateKey})}); sessionId=data.sessionId; renderSteps(data.portals); log((certificateKey?'Consulta individual':'Consulta completa')+' iniciada: '+sessionId); poll=setInterval(refresh,800); refresh(); }catch(e){alert(e.message); $('btnConsultarTodas').disabled=false; $('btnParar').disabled=true;}
+    try{ const data=await api('/api/session',{method:'POST',body:JSON.stringify({cnpj,razaoSocial:$('razaoSocial')?.value||'',certificateKey,sessionId:startingId})}); if(sessionId!==startingId)return; sessionId=data.sessionId; renderSteps(data.portals); log((certificateKey?'Consulta individual':'Consulta completa')+' iniciada: '+sessionId); poll=setInterval(refresh,800); refresh(); }catch(e){if(sessionId!==startingId)return;alert(e.message);sessionId=null; $('btnConsultarTodas').disabled=false; $('btnParar').disabled=true;}
   }
   $('btnConsultarTodas').onclick=()=>startConsultation();
   window.startSingleCertificate=startConsultation;
-  $('btnContinuar').onclick=async()=>{ if(!sessionId)return; $('btnContinuar').disabled=true; $('v2Human').classList.add('v2-hidden'); await api(`/api/session/${sessionId}/resume`,{method:'POST'}); log('Usuário autorizou a retomada da automação.'); };
-  $('btnParar').onclick=async()=>{ if(!sessionId)return; await api(`/api/session/${sessionId}/stop`,{method:'POST'}); log('Sessão interrompida pelo usuário.'); };
+  $('btnContinuar').onclick=async()=>{
+    if(!sessionId)return;
+    $('btnContinuar').disabled=true;
+    try{
+      const resumed=await api(`/api/session/${sessionId}/resume`,{method:'POST',body:JSON.stringify({portal:municipalActive?'municipal':''})});
+      log(resumed.message||(resumed.completed?'Certidão municipal concluída e salva.':'Retomada solicitada na mesma página do portal.'));
+      await refresh();
+    }catch(error){log(error.message);alert(error.message);await refresh();}
+  };
+  $('btnParar').onclick=async()=>{
+    const stoppedId=sessionId;if(!stoppedId)return;
+    $('btnParar').disabled=true;$('btnContinuar').disabled=true;
+    try{
+      await api(`/api/session/${stoppedId}/stop`,{method:'POST'});
+      if(sessionId!==stoppedId)return;
+      clearInterval(poll);poll=null;sessionId=null;municipalActive=false;
+      $('btnConsultarTodas').disabled=false;$('v2Human').classList.add('v2-hidden');
+      $('v2ProgressText').textContent='Consulta interrompida. Pronto para uma nova consulta.';
+      log('Consulta cancelada. Você já pode iniciar uma nova consulta.');
+    }catch(error){if(sessionId===stoppedId){$('btnParar').disabled=false;alert(error.message);}}
+  };
   async function processAutoPdf(e){
     if(!e.portal || !e.fileUrl) return;
     const org = ORGAOS.find(o=>o.key===e.portal);
@@ -1159,7 +1187,9 @@ window.addEventListener('DOMContentLoaded',()=>{
   async function refresh(){
     if(!sessionId)return;
     try{
-      const s=await api('/api/session/'+sessionId);
+      const refreshingId=sessionId;
+      const s=await api('/api/session/'+refreshingId);
+      if(sessionId!==refreshingId)return;
       const done=s.events.filter(e=>e.type==='portal_done').length;
       const failed=s.events.filter(e=>e.type==='portal_skipped').length;
       const total=Math.max(1,(s.portals||[]).length);
@@ -1168,10 +1198,15 @@ window.addEventListener('DOMContentLoaded',()=>{
       const last=s.events.slice(-12);
       $('v2Log').textContent=last.map(e=>`${e.time.slice(11,19)} — ${e.message||e.type}${e.portal?' — '+e.portal:''}`).join('\n');
       const boundary=s.events.findLastIndex(e=>['portal_start','portal_done','portal_skipped','captcha_solved','manual_resume','resumed','complete','stopped'].includes(e.type));
-      const human=s.events.slice(boundary+1).find(e=>e.type==='human_action_required');
-      $('v2Human').classList.toggle('v2-hidden',!human);
-      $('btnContinuar').disabled=!human;
-      if(human) $('v2HumanMsg').textContent=human.message;
+      const recent=s.events.slice(boundary+1);
+      const municipal=window.municipalInteraction(recent);
+      municipalActive=!!municipal;
+      const human=municipal || recent.find(e=>e.type==='human_action_required');
+      const waiting=!!human && (!municipal || municipal.canContinue) && s.status==='running';
+      $('v2Human').classList.toggle('v2-hidden',!human || s.status!=='running');
+      $('btnContinuar').disabled=!waiting;
+      $('btnContinuar').textContent=municipal?.state==='document_ready'?'Continuar e concluir':'Continuar';
+      if(human)$('v2HumanMsg').textContent=human.message;
       s.events.forEach(e=>{
         if(e.portal){
           if(e.type==='portal_start')step(e.portal,'Consultando');
@@ -1193,9 +1228,15 @@ window.addEventListener('DOMContentLoaded',()=>{
                 ...prev,
                 source: e.source || prev.source || '',
                 archivedAt: e.archivedAt || prev.archivedAt || '',
-                status: parsed.status || prev.status || '',
-                validade: parsed.validade || prev.validade || '',
-                numero: parsed.numero || prev.numero || '',
+                status: parsed.status ?? (prev.pdfUrl===e.fileUrl ? prev.status : '') ?? '',
+                validade: parsed.validade ?? (prev.pdfUrl===e.fileUrl ? prev.validade : '') ?? '',
+                numero: parsed.numero ?? (prev.pdfUrl===e.fileUrl ? prev.numero : '') ?? '',
+                dataConsulta:e.dataConsulta ?? parsed.dataConsulta ?? e.dataEmissao ?? parsed.dataEmissao ?? '',
+                simei:e.simei ?? parsed.simei ?? '',
+                chaveConsulta:e.chaveConsulta ?? parsed.chaveConsulta ?? (prev.pdfUrl===e.fileUrl ? prev.chaveConsulta : '') ?? '',
+                officialPortal:e.officialPortal ?? (prev.pdfUrl===e.fileUrl ? prev.officialPortal : null) ?? null,
+                captureMethod:e.captureMethod ?? (prev.pdfUrl===e.fileUrl ? prev.captureMethod : '') ?? '',
+                sourceUrl:e.sourceUrl ?? (prev.pdfUrl===e.fileUrl ? prev.sourceUrl : '') ?? '',
                 verificado: prev.verificado || false,
                 municipio,
                 org,
@@ -1242,19 +1283,20 @@ body{overflow-x:hidden}
 .dash-search{width:min(520px,48vw);height:46px;border:1px solid #cfe0f3;background:#f8fbff;border-radius:11px;display:flex;align-items:center;padding:0 15px;gap:10px;box-shadow:inset 0 1px 2px rgba(15,55,100,.03)}.dash-search input{border:0;outline:0;background:transparent;width:100%;font-size:15px;color:#0b2448}.dash-search .ico{font-size:20px;color:#1d4f91}.dash-consult{height:46px;border:0;border-radius:9px;background:#07356e;color:#fff;font-weight:800;padding:0 29px;cursor:pointer}.dash-top-spacer{flex:1}.dash-theme{font-size:19px;padding:10px 12px}.dash-user{display:flex;align-items:center;gap:10px;margin-left:8px}.dash-avatar{width:40px;height:40px;border-radius:50%;display:grid;place-items:center;color:#fff;background:linear-gradient(135deg,#5e6ff4,#8d71f4);font-weight:800}.dash-user b{font-size:13px}.dash-user small{display:block;color:#6c7d94;font-size:11px;margin-top:2px}
 .dash-main{padding:16px 25px 24px}.dash-hero{height:142px;border:1px solid #dceaf9;border-radius:16px;background:linear-gradient(120deg,#eaf4ff 0%,#fff 58%,#eef9ff 100%);display:grid;grid-template-columns:120px 1fr 230px;align-items:center;padding:20px 28px;box-shadow:0 8px 28px rgba(21,66,112,.06);overflow:hidden}.hero-doc{width:76px;height:92px;border-radius:12px;background:linear-gradient(145deg,#5c9cfb,#2f7cf2);display:grid;place-items:center;color:white;font-size:46px;box-shadow:0 13px 25px rgba(46,122,242,.22)}.dash-hero h2{font-size:21px;margin:0 0 6px}.dash-hero p{margin:0;color:#526a89;font-size:13px}.hero-features{display:flex;gap:28px;margin-top:20px;flex-wrap:wrap}.hero-features span{font-size:12px;color:#27496f}.hero-features span:before{content:'◆';color:#2578ef;margin-right:8px}.hero-note{font-family:cursive;font-size:23px;line-height:1.1;color:#0c3d83;transform:rotate(-5deg);text-align:center}
 .consult-summary{margin-top:14px;border:1px solid #e0e9f4;background:#fff;border-radius:13px;min-height:92px;display:grid;grid-template-columns:1fr 1.2fr 1.55fr .9fr auto;align-items:center;padding:13px 23px;box-shadow:0 5px 18px rgba(26,66,110,.05)}.sum-block{padding-right:20px;border-right:1px solid #e6edf6}.sum-block:last-of-type{border-right:0}.sum-label{font-size:10px;color:#7890ad;text-transform:uppercase}.sum-value{margin-top:5px;font-weight:800;font-size:16px}.sum-company{font-size:14px}.sum-ok{display:inline-flex;margin-top:5px;background:#dff6e6;color:#15853f;border-radius:9px;padding:3px 8px;font-size:10px;font-weight:700}.new-query{border:1px solid #bcd9fb;background:#f7fbff;color:#0b4a96;border-radius:9px;padding:11px 18px;font-weight:700;cursor:pointer}
-.stepper{display:grid;grid-template-columns:repeat(5,1fr);margin:17px 30px 20px;position:relative}.stepper:before{content:'';position:absolute;top:17px;left:9%;right:9%;height:2px;background:#2d82f3}.step{text-align:center;position:relative}.step-dot{width:34px;height:34px;margin:auto;border-radius:50%;background:#1678e9;color:#fff;display:grid;place-items:center;border:4px solid #e5f1ff;box-shadow:0 0 0 1px #8ac0ff;font-weight:900}.step.pending .step-dot{background:#dbe7f5;color:#6b7e95;box-shadow:none}.step-label{font-size:10px;font-weight:700;margin-top:5px}
-.cert-cards{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:14px}.cert-card{background:#fff;border:1px solid #dfe9f5;border-radius:13px;padding:15px 14px 12px;min-height:225px;box-shadow:0 6px 18px rgba(18,58,100,.05);display:flex;flex-direction:column}.cert-card.active{border:1.5px solid #1678e9;box-shadow:0 8px 24px rgba(22,120,233,.11)}.card-brand{display:flex;align-items:center;gap:10px}.org-icon{width:42px;height:42px;border-radius:10px;background:#eef6ff;color:#0d5fb8;display:grid;place-items:center;font-weight:900;font-size:18px}.cert-card h3{font-size:13px;margin:0}.cert-card .sub{font-size:10px;color:#71839a;margin-top:2px}.status-pill{display:inline-flex;align-items:center;gap:6px;align-self:flex-start;margin-top:14px;background:#dff6e6;color:#107838;border-radius:8px;padding:7px 9px;font-size:11px;font-weight:800}.status-pill.warn{background:#fff3d7;color:#9a6300}.status-pill.bad{background:#fde5e5;color:#aa2d2d}.status-pill.empty{background:#eef3f8;color:#6c7d92}.valid-line{margin-top:10px;font-size:11px;color:#526b8c}.card-actions{margin-top:auto;display:grid;gap:6px}.consult-card-btn,.details-btn{border:1px solid #b8d7fb;border-radius:8px;padding:8px;font-weight:800;font-size:11px;cursor:pointer}.consult-card-btn{background:#1769e0;color:#fff;border-color:#1769e0}.details-btn{background:#f7fbff;color:#0b468b}
-.doc-workspace{margin-top:16px;border:1px solid #e1eaf5;background:#fff;border-radius:14px;display:grid;grid-template-columns:205px minmax(420px,1fr) 360px;min-height:345px;overflow:hidden;box-shadow:0 8px 28px rgba(16,55,100,.05)}.doc-menu{border-right:1px solid #e7edf5;padding:15px}.doc-back{font-weight:800;font-size:12px;margin-bottom:18px}.doc-tab{padding:11px 12px;border-radius:8px;font-size:12px;color:#38536f;margin-bottom:4px}.doc-tab.active{background:#dcebff;color:#0a4c9b;font-weight:800}.pdf-pane{background:#eef2f6;display:flex;flex-direction:column}.pdf-toolbar{height:47px;background:#30363a;color:#fff;display:flex;align-items:center;padding:0 14px;font-size:11px;gap:12px}.pdf-toolbar b{margin-right:auto}.pdf-frame{flex:1;background:#fff}.pdf-frame iframe{width:100%;height:100%;border:0}.pdf-placeholder{height:100%;display:grid;place-items:center;text-align:center;color:#8293a7;padding:30px}.info-pane{padding:15px;border-left:1px solid #e7edf5}.info-pane h4{font-size:13px;margin:0 0 16px}.info-row{display:flex;justify-content:space-between;gap:18px;padding:8px 0;font-size:11px}.info-row strong{text-align:right}.info-actions{margin-top:12px;display:grid;grid-template-columns:1fr 1fr;gap:8px}.info-actions a,.info-actions button{border:1px solid #0e5fc3;border-radius:8px;background:#fff;color:#0b4d9a;font-weight:800;padding:10px;font-size:11px;text-decoration:none;text-align:center;cursor:pointer}.info-actions .primary{grid-column:1/-1;background:#073a78;color:#fff;border-color:#073a78}
+.stepper{display:grid;grid-template-columns:repeat(6,1fr);margin:17px 30px 20px;position:relative}.stepper:before{content:'';position:absolute;top:17px;left:9%;right:9%;height:2px;background:#2d82f3}.step{text-align:center;position:relative}.step-dot{width:34px;height:34px;margin:auto;border-radius:50%;background:#1678e9;color:#fff;display:grid;place-items:center;border:4px solid #e5f1ff;box-shadow:0 0 0 1px #8ac0ff;font-weight:900}.step.pending .step-dot{background:#dbe7f5;color:#6b7e95;box-shadow:none}.step-label{font-size:10px;font-weight:700;margin-top:5px}
+.cert-cards{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px}.cert-card{background:#fff;border:1px solid #dfe9f5;border-radius:13px;padding:15px 14px 12px;min-height:225px;box-shadow:0 6px 18px rgba(18,58,100,.05);display:flex;flex-direction:column}.cert-card.active{border:1.5px solid #1678e9;box-shadow:0 8px 24px rgba(22,120,233,.11)}.card-brand{display:flex;align-items:center;gap:10px}.org-icon{width:42px;height:42px;border-radius:10px;background:#eef6ff;color:#0d5fb8;display:grid;place-items:center;font-weight:900;font-size:18px}.cert-card h3{font-size:13px;margin:0}.cert-card .sub{font-size:10px;color:#71839a;margin-top:2px}.status-pill{display:inline-flex;align-items:center;gap:6px;align-self:flex-start;margin-top:14px;background:#dff6e6;color:#107838;border-radius:8px;padding:7px 9px;font-size:11px;font-weight:800}.status-pill.warn{background:#fff3d7;color:#9a6300}.status-pill.bad{background:#fde5e5;color:#aa2d2d}.status-pill.empty{background:#eef3f8;color:#6c7d92}.valid-line{margin-top:10px;font-size:11px;color:#526b8c}.card-actions{margin-top:auto;display:grid;gap:6px}.consult-card-btn,.details-btn{border:1px solid #b8d7fb;border-radius:8px;padding:8px;font-weight:800;font-size:11px;cursor:pointer}.consult-card-btn{background:#1769e0;color:#fff;border-color:#1769e0}.details-btn{background:#f7fbff;color:#0b468b}
+.doc-workspace{margin-top:16px;border:1px solid #e1eaf5;background:#fff;border-radius:14px;display:grid;grid-template-columns:205px minmax(0,1fr);min-height:345px;overflow:hidden;box-shadow:0 8px 28px rgba(16,55,100,.05)}.doc-menu{border-right:1px solid #e7edf5;padding:15px}.doc-back{font-weight:800;font-size:12px;margin-bottom:18px}.doc-tab{padding:11px 12px;border-radius:8px;font-size:12px;color:#38536f;margin-bottom:4px}.doc-tab.active{background:#dcebff;color:#0a4c9b;font-weight:800}.pdf-pane{background:#eef2f6;display:flex;flex-direction:column}.pdf-toolbar{height:47px;background:#30363a;color:#fff;display:flex;align-items:center;padding:0 14px;font-size:11px;gap:12px}.pdf-toolbar b{margin-right:auto}.pdf-frame{flex:1;background:#fff}.pdf-frame iframe{width:100%;height:100%;border:0}.pdf-placeholder{height:100%;display:grid;place-items:center;text-align:center;color:#8293a7;padding:30px}.info-pane{padding:15px;border-left:1px solid #e7edf5}.info-pane h4{font-size:13px;margin:0 0 16px}.info-row{display:flex;justify-content:space-between;gap:18px;padding:8px 0;font-size:11px}.info-row strong{text-align:right}.info-actions{margin-top:12px;display:grid;grid-template-columns:1fr 1fr;gap:8px}.info-actions a,.info-actions button{border:1px solid #0e5fc3;border-radius:8px;background:#fff;color:#0b4d9a;font-weight:800;padding:10px;font-size:11px;text-decoration:none;text-align:center;cursor:pointer}.info-actions .primary{grid-column:1/-1;background:#073a78;color:#fff;border-color:#073a78}
 .dash-footer{display:flex;justify-content:space-between;color:#7387a1;font-size:10px;padding:15px 2px 0}
 .dash-runbar{margin-top:14px;border:1px solid #dce8f5;background:rgba(255,255,255,.95);border-radius:14px;padding:13px 16px;display:grid;grid-template-columns:auto auto auto 1fr;gap:9px;align-items:center;box-shadow:0 6px 22px rgba(18,58,100,.04)}
 .dash-run-btn{border:0;border-radius:9px;padding:11px 16px;font-weight:800;font-size:12px;cursor:pointer;transition:.18s}.dash-run-btn.primary{background:linear-gradient(135deg,#0b63ce,#0b7fe7);color:#fff;box-shadow:0 7px 18px rgba(11,99,206,.22)}.dash-run-btn.secondary{background:#eef5fd;color:#174e87;border:1px solid #cfe0f3}.dash-run-btn.danger{background:#fff3f3;color:#a83232;border:1px solid #f2caca}.dash-run-btn:disabled{opacity:.48;cursor:not-allowed;box-shadow:none}
 .dash-run-status{min-width:0;padding-left:8px}.dash-run-status-top{display:flex;align-items:center;justify-content:space-between;gap:12px;font-size:11px;color:#526a86;margin-bottom:6px}.dash-run-status b{color:#183b66}.dash-run-track{height:7px;border-radius:999px;background:#e7eef7;overflow:hidden}.dash-run-fill{height:100%;width:0;background:linear-gradient(90deg,#0d68d5,#35a0ff);transition:width .25s ease}.dash-human{grid-column:1/-1;background:#fff7df;border:1px solid #f2cf73;color:#7e5800;padding:9px 11px;border-radius:9px;font-size:11px;display:none}.dash-human.show{display:block}
-@media(max-width:1200px){.cert-cards{grid-template-columns:repeat(3,1fr)}.doc-workspace{grid-template-columns:170px 1fr 300px}.hero-note{display:none}.dash-hero{grid-template-columns:100px 1fr}.consult-summary{grid-template-columns:1fr 1fr}.sum-block{border-right:0}.new-query{justify-self:end}}
-@media(max-width:900px){.app-sidebar{display:none!important}.wrap{margin-left:0!important;width:100%!important}.cert-cards{grid-template-columns:1fr 1fr}.doc-workspace{grid-template-columns:1fr}.doc-menu{display:none}.info-pane{border-left:0}.dash-user{display:none}.dash-topbar{padding:0 12px}.dash-main{padding:12px}.dash-hero{grid-template-columns:1fr;height:auto}.hero-doc{display:none}.consult-summary{grid-template-columns:1fr}.stepper{margin-left:0;margin-right:0}}
+@media(max-width:1200px){.cert-cards{grid-template-columns:repeat(3,1fr)}.doc-workspace{grid-template-columns:170px minmax(0,1fr)}.hero-note{display:none}.dash-hero{grid-template-columns:100px 1fr}.consult-summary{grid-template-columns:1fr 1fr}.sum-block{border-right:0}.new-query{justify-self:end}}
+@media(max-width:900px){.app-sidebar{display:none!important}.wrap{margin-left:0!important;width:100%!important}.cert-cards{grid-template-columns:1fr 1fr}.doc-workspace{grid-template-columns:1fr}.doc-menu{display:flex;flex-wrap:wrap;gap:6px}.info-pane{border-left:0}.dash-user{display:none}.dash-topbar{padding:0 12px}.dash-main{padding:12px}.dash-hero{grid-template-columns:1fr;height:auto}.hero-doc{display:none}.consult-summary{grid-template-columns:1fr}.stepper{margin-left:0;margin-right:0}}
 </style>
 <script id="exact-dashboard-v291-js">
 (function(){
   const ORG_META={
+    simples:{name:'Simples Nacional',sub:'Consulta Optantes / SIMEI',icon:'S'},
     federal:{name:'Receita Federal',sub:'CND Federal',icon:'◆'},
     fgts:{name:'FGTS',sub:'Certificado de Regularidade',icon:'▰'},
     trabalhista:{name:'Trabalhista',sub:'CNDT',icon:'▣'},
@@ -1267,13 +1309,14 @@ body{overflow-x:hidden}
   const fmtCnpj=v=>{const d=String(v||'').replace(/\D/g,'').slice(0,14);return d.length===14?d.replace(/(\d{2})(\d{3})(\d{3})(\d{4})(\d{2})/,'$1.$2.$3/$4-$5'):d};
   const fmtDate=iso=>{if(!iso)return '—';const [y,m,d]=String(iso).split('-');return y&&m&&d?`${d}/${m}/${y}`:iso};
   const statusInfo=s=>({
+    optante:['Optante pelo Simples','ok'],nao_optante:['Não optante pelo Simples','warn'],
     negativa:['Negativa','ok'],positiva_efeito_negativa:['Positiva c/ efeito de negativa','ok'],positiva:['Positiva','bad']
   }[s]||['Aguardando','empty']);
   function ensure(){
     if(document.getElementById('dreamDashboard')) return;
     const root=document.createElement('div');root.id='dreamDashboard';
     root.innerHTML=`
-      <div class="dash-topbar">
+      <div class="institution-brand"><img src="/brand/horizonte.jpg" alt="Prefeitura de Horizonte"><img src="/brand/cgm.png" alt="Controladoria Geral do Município de Horizonte"></div><div class="dash-topbar">
         <div class="dash-search"><span class="ico">⌕</span><input id="dashCnpj" placeholder="Digite o CNPJ para consultar..."></div>
         <button class="dash-consult" id="dashConsult">Consultar</button>
         <div class="dash-top-spacer"></div><div class="dash-theme">☼</div>
@@ -1291,8 +1334,8 @@ body{overflow-x:hidden}
         </section>
         <section class="stepper" id="dashStepper"></section>
         <section class="cert-cards" id="dashCards"></section>
-        <section class="doc-workspace"><aside class="doc-menu"><div class="doc-back">← Voltar</div><div class="doc-tab active">▣ &nbsp; Documento</div><div class="doc-tab">☷ &nbsp; Dados extraídos</div><div class="doc-tab">♢ &nbsp; Autenticidade</div><div class="doc-tab">▤ &nbsp; Observações</div></aside><div class="pdf-pane"><div class="pdf-toolbar"><b id="pdfTitle">Documento</b><span>Use os controles do leitor PDF para zoom e impressão</span></div><div class="pdf-frame" id="pdfFrame"></div></div><aside class="info-pane" id="infoPane"></aside></section>
-        <footer class="dash-footer"><span>Central de Certidões | Controladoria Geral do Município de Horizonte/CE</span><span>Versão 2.9.3.5</span></footer>
+        <section class="doc-workspace"><aside class="doc-menu"><div class="doc-back">← Voltar</div><div class="doc-tab active">▣ &nbsp; Documento</div><div class="doc-tab">☷ &nbsp; Dados extraídos</div><div class="doc-tab">♢ &nbsp; Autenticidade</div><div class="doc-tab">▤ &nbsp; Observações</div><button class="doc-file-action" id="attachDocument">Anexar PDF</button><button class="doc-file-action" id="replaceDocument">Substituir PDF</button></aside><div class="pdf-pane"><div class="pdf-toolbar"><b id="pdfTitle">Documento</b><span>Use os controles do leitor PDF para zoom e impressão</span></div><div class="pdf-frame" id="pdfFrame"></div></div></section>
+        <footer class="dash-footer"><span>Central de Certidões | Controladoria Geral do Município de Horizonte/CE</span><span>Versão 2.9.4.4</span></footer>
       </main>`;
     document.querySelector('.wrap').prepend(root);
     const d=document.getElementById('dashCnpj'); const old=document.getElementById('cnpj');
@@ -1327,20 +1370,20 @@ body{overflow-x:hidden}
     const oldCnpj=document.getElementById('cnpj')?.value||''; const company=document.getElementById('razaoSocial')?.value||'';
     document.getElementById('sumCnpj').textContent=fmtCnpj(oldCnpj)||'—'; document.getElementById('sumEmpresa').textContent=company||'Empresa consultada'; document.getElementById('sumData').textContent=new Date().toLocaleString('pt-BR',{dateStyle:'short',timeStyle:'short'});
     const address=[companyData.logradouro,companyData.numero,companyData.complemento,companyData.bairro].filter(Boolean).join(', '); const city=[companyData.municipio,companyData.uf].filter(Boolean).join('/'); const cep=companyData.cep?`CEP ${String(companyData.cep).replace(/\D/g,'').replace(/^(\d{5})(\d{3})$/,'$1-$2')}`:''; document.getElementById('sumEndereco').textContent=[address,city,cep].filter(Boolean).join(' · ')||'Endereço não localizado';
-    const keys=['federal','fgts','trabalhista','ceara','municipal'];
+    const keys=['federal','fgts','trabalhista','ceara','municipal','simples'];
     const step=document.getElementById('dashStepper');step.innerHTML=keys.map(k=>{const done=state?.[k]?.status;return `<div class="step ${done?'':'pending'}"><div class="step-dot">${done?'✓':'·'}</div><div class="step-label">${ORG_META[k].name}</div></div>`}).join('');
     const validityInfo=iso=>{if(!iso)return ['Validade não informada','empty'];const today=new Date();today.setHours(0,0,0,0);const expires=new Date(iso+'T00:00:00');const days=Math.ceil((expires-today)/86400000);if(days<0)return ['Vencida','bad'];if(days===0)return ['Alerta: vence hoje','bad'];if(days<=5)return [`Alerta: vence em ${days} dia${days===1?'':'s'}`,'bad'];if(days<=7)return [`Atenção: vence em ${days} dias`,'warn'];return [`Válida por mais ${days} dias`,'ok'];};
-    const cards=document.getElementById('dashCards');cards.innerHTML=keys.map(k=>{const s=state?.[k]||{};const [label,cl]=statusInfo(s.status);const [validity,vcl]=validityInfo(s.validade);return `<article class="cert-card ${k===selectedKey?'active':''}" data-k="${k}"><div class="card-brand"><div class="org-icon">${ORG_META[k].icon}</div><div><h3>${ORG_META[k].name}</h3><div class="sub">${ORG_META[k].sub}</div></div></div><div class="status-pill ${cl==='ok'?'':cl}">● ${label}</div><div class="status-pill ${vcl==='ok'?'':vcl}" style="margin-top:7px">◷ ${validity}</div><div class="valid-line">▣ &nbsp; ${s.validade?'Validade: '+fmtDate(s.validade):'Validade não informada'}</div><div class="card-actions"><button class="consult-card-btn" data-consult="${k}">Consultar esta certidão</button><button class="details-btn">Ver detalhes &nbsp;→</button></div></article>`}).join('');
+    const cards=document.getElementById('dashCards');cards.innerHTML=keys.map(k=>{const s=state?.[k]||{};const [label,cl]=statusInfo(s.status);const [validity,vcl]=k==='simples'?[simplesReview(s).label,simplesReview(s).className]:validityInfo(s.validade);return `<article class="cert-card ${k===selectedKey?'active':''}" data-k="${k}"><div class="card-brand"><div class="org-icon">${ORG_META[k].icon}</div><div><h3>${ORG_META[k].name}</h3><div class="sub">${ORG_META[k].sub}</div></div></div><div class="status-pill ${cl==='ok'?'':cl}">● ${label}</div><div class="status-pill ${vcl==='ok'?'':vcl}" style="margin-top:7px">◷ ${validity}</div><div class="valid-line">▣ &nbsp; ${k==='simples'?'SIMEI: '+(s.simei==='enquadrado'?'Enquadrado':s.simei==='nao_enquadrado'?'Não enquadrado':'A consultar'):s.validade?'Validade: '+fmtDate(s.validade):'Validade não informada'}</div><div class="card-actions"><button class="consult-card-btn" data-consult="${k}">${k==='simples'?'Consultar optantes':'Consultar esta certidão'}</button><button class="details-btn">Ver detalhes &nbsp;→</button></div></article>`}).join('');
     cards.querySelectorAll('.consult-card-btn').forEach(btn=>btn.onclick=e=>{e.stopPropagation();window.startSingleCertificate?.(btn.dataset.consult);});
-    cards.querySelectorAll('.cert-card').forEach(el=>{el.tabIndex=0;el.setAttribute('role','button');const select=()=>{selectedKey=el.dataset.k;render();window.centralShowTab?.('Documento');};el.onclick=select;el.onkeydown=e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();select();}};});
+    cards.querySelectorAll('.cert-card').forEach(el=>{el.tabIndex=0;el.setAttribute('role','button');const select=()=>{selectedKey=el.dataset.k;render();window.centralShowTab?.('Documento');document.querySelector('.doc-workspace')?.scrollIntoView({behavior:window.matchMedia('(prefers-reduced-motion: reduce)').matches?'auto':'smooth',block:'start'});};el.onclick=select;el.onkeydown=e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();select();}};});
+    const selectedDocument=state?.[selectedKey]||{};document.getElementById('attachDocument').disabled=!!selectedDocument.pdfUrl;document.getElementById('replaceDocument').disabled=!selectedDocument.pdfUrl;
     const s=state?.[selectedKey]||{}; const meta=ORG_META[selectedKey]; const [label,cl]=statusInfo(s.status); const url=s.pdfUrl||''; const viewUrl=s.viewUrl||url; const downloadUrl=s.downloadUrl||url;
-    document.getElementById('pdfTitle').textContent=s.pdfNome||({federal:'CND FEDERAL.pdf',fgts:'CRF FGTS.pdf',trabalhista:'CND TRABALHISTA.pdf',ceara:'CND ESTADUAL.pdf',municipal:'CND MUNICIPAL.pdf'}[selectedKey]);
+    document.getElementById('pdfTitle').textContent=s.pdfNome||({simples:'SIMPLES NACIONAL.pdf',federal:'CND FEDERAL.pdf',fgts:'CRF FGTS.pdf',trabalhista:'CND TRABALHISTA.pdf',ceara:'CND ESTADUAL.pdf',municipal:'CND MUNICIPAL.pdf'}[selectedKey]);
     const frameKey=cnpjDigits()+'|'+selectedKey+'|'+viewUrl;
     if(lastFrame!==frameKey){lastFrame=frameKey;document.getElementById('pdfFrame').innerHTML=viewUrl?`<iframe src="${viewUrl}#toolbar=1&navpanes=0"></iframe>`:`<div class="pdf-placeholder"><div><div style="font-size:42px">▧</div><b>Nenhum PDF arquivado ainda</b><div style="font-size:12px;margin-top:7px">Quando a certidão for emitida, o documento aparecerá aqui automaticamente.</div></div></div>`;
     }
     window.centralPreviewPdf?.(viewUrl);
     const verify=ORGAOS.find(o=>o.key===selectedKey)?.verifyUrl||'#';
-    document.getElementById('infoPane').innerHTML=`<h4>▣ &nbsp; Informações extraídas do PDF</h4><div class="info-row"><span>Situação</span><strong><span class="status-pill ${cl==='ok'?'':cl}" style="margin:0;padding:5px 7px">● ${label}</span></strong></div><div class="info-row"><span>Data de validade</span><strong>▣ &nbsp; ${fmtDate(s.validade)}</strong></div><div class="info-row"><span>Código de controle</span><strong>${String(s.numero||'—').replace(/[&<>"']/g,c=>'&#'+c.charCodeAt(0)+';')}</strong></div><div class="info-actions">${viewUrl?`<a class="primary" target="_blank" rel="noopener" href="${viewUrl}">🖨 &nbsp; Abrir / imprimir PDF</a><a href="${downloadUrl}" download="${s.pdfNome||'CERTIDAO.pdf'}">⇩ &nbsp; Baixar PDF</a>`:`<button class="primary" onclick="document.getElementById('file-${selectedKey}')?.click()">Adicionar PDF</button>`}${verify!=='#'?`<a target="_blank" rel="noopener" href="${verify}">↗ &nbsp; Verificar autenticidade</a>`:'<span>Verifique no portal da prefeitura indicada no PDF.</span>'}<button onclick="document.getElementById('file-${selectedKey}')?.click()">${viewUrl?'Substituir PDF':'Anexar PDF manual'}</button></div>`;
   }
   let archiveHydrateBusy=false;
   async function hydrateArchive(){
@@ -1354,12 +1397,13 @@ body{overflow-x:hidden}
       const a=await r.json();
       if(cnpjDigits()!==digits)return;
       let changed=false;
+      for(const key of Object.keys(a.rejectedCertificates||{})){if(!a.certificates?.[key]&&state[key]?.pdfUrl){state[key]={org:ORGAOS.find(o=>o.key===key),status:'',pdfUrl:'',validade:'',numero:'',verificado:false};changed=true;}}
       for(const [key,cert] of Object.entries(a.certificates||{})){
         if(!cert?.fileUrl) continue;
         const org=ORGAOS.find(o=>o.key===key); if(!org) continue;
         const prev=state[key]||{};
-        if(prev.pdfUrl===cert.fileUrl) continue;
-        state[key]={...prev,source:cert.source||'',archivedAt:cert.archivedAt||'',status:cert.status||prev.status||'',validade:cert.validade||prev.validade||'',numero:cert.numero||prev.numero||'',verificado:prev.verificado||false,org,pdfUrl:cert.fileUrl,viewUrl:cert.viewUrl||cert.fileUrl,downloadUrl:cert.downloadUrl||cert.fileUrl,pdfNome:cert.fileName||archivedPdfName(org)};
+        if(prev.pdfUrl===cert.fileUrl&&prev.dataConsulta===(cert.dataConsulta||cert.dataEmissao||'')&&prev.numero===(cert.numero||'')&&prev.chaveConsulta===(cert.chaveConsulta||'')) continue;
+        state[key]={...prev,dataConsulta:cert.dataConsulta||cert.dataEmissao||'',dataEmissao:cert.dataEmissao||'',simei:cert.simei||'',captureMethod:cert.captureMethod||'',chaveConsulta:cert.chaveConsulta||'',officialPortal:cert.officialPortal??null,sourceUrl:cert.sourceUrl||'',source:cert.source||'',archivedAt:cert.archivedAt||'',status:cert.status??'',validade:cert.validade??'',numero:cert.numero??'',verificado:prev.verificado||false,org,pdfUrl:cert.fileUrl,viewUrl:cert.viewUrl||cert.fileUrl,downloadUrl:cert.downloadUrl||cert.fileUrl,pdfNome:cert.fileName||archivedPdfName(org)};
         document.getElementById(`sel-${key}`) && (document.getElementById(`sel-${key}`).value=state[key].status||'');
         document.getElementById(`date-${key}`) && (document.getElementById(`date-${key}`).value=state[key].validade||'');
         document.getElementById(`numero-${key}`) && (document.getElementById(`numero-${key}`).value=state[key].numero||'');
@@ -1372,6 +1416,7 @@ body{overflow-x:hidden}
   window.addEventListener('DOMContentLoaded',()=>{setTimeout(()=>{render();hydrateArchive();},120);setInterval(()=>{hydrateArchive();syncRunControls();const signature=JSON.stringify(state)+cnpjDigits()+document.getElementById('razaoSocial').value;if(window.centralSignature!==signature){window.centralSignature=signature;render();}},1400)});
 })();
 </script>
+<script src="municipal-learning.js"></script>
 <script src="interface-fixes.js"></script>
 </body>
 </html>

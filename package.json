@@ -1,15 +1,19 @@
 {
   "name": "central-certidoes-v2",
-  "version": "2.9.3.11",
+  "version": "2.9.4.4",
   "private": true,
   "description": "Central de Certidões V2 - automação assistida com Playwright",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "dev": "node server.js"
+    "dev": "node server.js",
+    "test:municipal": "node --test test/municipal-learning.test.js test/municipal-storage.test.js test/portal-resolver-v293.test.js test/domain.test.js",
+    "test:stop": "node --test test/session-stop.test.js",
+    "test:print": "node --test test/municipal-print.test.js",
+    "test:regression": "node --test test/domain.test.js test/capture-provenance.test.js test/portal-isolation.test.js test/portal-continuation.test.js test/portal-resolver-v293.test.js test/municipal-portal-resolver.test.js test/municipal-layout.test.js test/municipal-learning.test.js test/municipal-print.test.js test/municipal-storage.test.js test/session-stop.test.js test/portal-regressions.test.js test/simples.test.js test/certificate-identifiers.test.js test/simples-review.test.js"
   },
   "dependencies": {
-    "express": "^4.21.2",
+    "express": "^4.22.3",
     "pdf-parse": "^1.1.1",
     "playwright": "^1.49.1"
   }

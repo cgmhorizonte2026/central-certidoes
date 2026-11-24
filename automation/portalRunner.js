@@ -1,3 +1,4 @@
+const { checkCancelled } = require('./cancellation');
 const fs = require('fs');
 const path = require('path');
 
@@ -17,12 +18,12 @@ async function saveDownloadAsPdf(download, finalPath) {
   const data = fs.readFileSync(tempPath);
   if (!looksLikePdf(data)) {
     const rawPath = finalPath.replace(/\.pdf$/i, '') + '-RESPOSTA-NAO-PDF.bin';
-    fs.renameSync(tempPath, rawPath);
+    checkCancelled();fs.renameSync(tempPath, rawPath);
     const err = new Error('O arquivo retornado pela Receita não possui conteúdo PDF. A resposta bruta foi preservada para diagnóstico.');
     err.rawPath = rawPath;
     throw err;
   }
-  fs.renameSync(tempPath, finalPath);
+  checkCancelled();fs.renameSync(tempPath, finalPath);
 }
 
 
@@ -52,6 +53,7 @@ async function waitForPdfInDirectory(dir, timeout = 60000) {
   const observed = new Map();
 
   while (Date.now() - started < timeout) {
+    checkCancelled();
     let names = [];
     try { names = fs.readdirSync(dir); } catch (_) {}
 
@@ -335,6 +337,8 @@ async function findSafeContinuation(context) {
         const element=elements.nth(i);
         if(!await element.isVisible().catch(()=>false) || !await element.isEnabled().catch(()=>false)) continue;
         const info=await element.evaluate(el=>{
+          const dialogs=[...el.ownerDocument.querySelectorAll('[role="dialog"],dialog[open],.modal.show,[aria-modal="true"]')].filter(d=>d.getClientRects().length&&getComputedStyle(d).visibility!=='hidden');
+          if(dialogs.length&&!dialogs.some(d=>d.contains(el)))return null;
           const container=el.closest('[role="dialog"],dialog,.modal,[aria-modal="true"],form,section,main')||el.parentElement;
           return {text:(el.innerText||el.value||el.getAttribute('aria-label')||el.title||'').trim(),context:(container?.innerText||'').trim().slice(0,1600),tag:el.tagName,role:el.getAttribute('role')||'',name:el.getAttribute('name')||'',id:el.id||''};
         }).catch(()=>null);
@@ -385,9 +389,9 @@ async function saveUnknownState({page,portal,baseDir,previousAction,emit,history
   const dir=path.join(baseDir,'data','diagnostics',`${portal.key}-${Date.now()}`);fs.mkdirSync(dir,{recursive:true});
   const screenshot=path.join(dir,'screen.png'),htmlFile=path.join(dir,'page.html'),jsonFile=path.join(dir,'state.json');
   await page.screenshot({path:screenshot,fullPage:true}).catch(()=>{});
-  const html=await page.content().catch(()=>'');fs.writeFileSync(htmlFile,html.slice(0,2_000_000));
+  const html=await page.content().catch(()=>'');checkCancelled();fs.writeFileSync(htmlFile,html.slice(0,2_000_000));
   const interactive=await page.locator('button,input,select,a,[role="button"]').evaluateAll(nodes=>nodes.slice(0,100).map(el=>({tag:el.tagName,text:(el.innerText||el.value||el.getAttribute('aria-label')||'').trim(),id:el.id||'',name:el.getAttribute('name')||'',type:el.getAttribute('type')||''}))).catch(()=>[]);
-  const diagnostic={status:'ESTADO_DESCONHECIDO',municipio:portal.name,url:page.url(),etapaAnterior:previousAction,history,interactive};fs.writeFileSync(jsonFile,JSON.stringify(diagnostic,null,2));
+  const diagnostic={status:'ESTADO_DESCONHECIDO',municipio:portal.name,url:page.url(),etapaAnterior:previousAction,history,interactive};checkCancelled();fs.writeFileSync(jsonFile,JSON.stringify(diagnostic,null,2));
   emit({type:'unknown_state',status:'ESTADO_DESCONHECIDO',portal:portal.key,url:page.url(),diagnosticDir:dir,message:'O portal apresentou uma etapa que não pôde ser interpretada com segurança.'});
   return diagnostic;
 }
@@ -414,6 +418,9 @@ async function continueIssuanceFlow({page,context,browser,portal,baseDir,emit,ma
     }
     const next=await findSafeContinuation(context);
     if(!next){
+      const blockingModal=await page.locator('[role="dialog"]:visible,dialog[open]:visible,.modal.show:visible,[aria-modal="true"]:visible').count().catch(()=>0);
+      if(blockingModal){emit({type:'portal_intervention',portal:portal.key,message:'O portal apresentou uma mensagem. Confira a janela e clique em Continuar após resolvê-la.'});await browser.waitForHumanResume('Confira a mensagem aberta no portal. Resolva a pendência e clique em Continuar na Central.');continue;}
+
       const documentAction=await (async()=>{
         for(const candidate of livePages){
           const selectors=['a[href*="impressao_documentos" i]','a:has-text("Imprimir")','button:has-text("Imprimir")','a:has-text("Visualizar")','button:has-text("Visualizar")'];
@@ -436,6 +443,7 @@ async function continueIssuanceFlow({page,context,browser,portal,baseDir,emit,ma
 async function waitForPdfNavigation(page, timeout = 20000) {
   const started = Date.now();
   while (Date.now() - started < timeout) {
+    checkCancelled();
     if (/\.pdf(?:$|[?#])/i.test(page.url())) {
       try {
         const response = await page.request.get(page.url(), { timeout: 10000 });
@@ -468,6 +476,7 @@ async function printCertificatePageFromContext(context, cnpj, portalKey, timeout
   const digits = onlyDigits(cnpj);
   const started = Date.now();
   while (Date.now() - started < timeout) {
+    checkCancelled();
     const pages = context.pages().filter(p => !p.isClosed()).reverse();
     for (const candidate of pages) {
       try {
@@ -725,9 +734,13 @@ async function federalExistingCertificateFlow(page, emit, baseDir, cnpj) {
 }
 
 async function runPortal({ portal, cnpj, browser, baseDir, emit }) {
+  if (portal.key === 'simples') return require('./simplesRunner').runSimples({portal,cnpj,browser,baseDir,emit});
   if (portal.key === 'fgts') return require('./fgtsRunner').runFgts({portal,cnpj,browser,baseDir,emit});
   // Cada portal usa uma única aba e só a abre quando o portal anterior terminou.
   const page = await browser.newPortalPage();
+  const context=require('./portal-pages').portalPages(page);
+  const evidence=require('./capture-provenance').observeCapture(page,portal);
+  try {
   emit({ type: 'portal_opening', portal: portal.key, name: portal.name, url: portal.url });
   await page.goto(portal.url, { waitUntil: 'domcontentloaded', timeout: 60000 });
   await page.bringToFront().catch(() => {});
@@ -750,7 +763,7 @@ async function runPortal({ portal, cnpj, browser, baseDir, emit }) {
   if (portal.key === 'municipal') {
     const catalogSeen = new Set();
     for (let step = 1; step <= 5; step++) {
-      const service = await findMunicipalCertificateService(browser.context, catalogSeen);
+      const service = await findMunicipalCertificateService(context, catalogSeen);
       if (!service) break;
       const label = service.info.text;
       catalogSeen.add(normalText(label) + '|' + service.info.href);
@@ -845,13 +858,13 @@ async function runPortal({ portal, cnpj, browser, baseDir, emit }) {
       if (!controlledDownloadDir) {
         controlledDownloadDir = await prepareControlledDownloadDir(page, baseDir, cnpj, emit, portal.key);
       }
-      const result = await capturePdfFromClick(page, browser.context, action.selectors || [], action.downloadTimeout || 30000);
+      const result = await capturePdfFromClick(page, context, action.selectors || [], action.downloadTimeout || 30000);
       clicked = !!result;
       if (result?.download) download = result.download;
       if (result?.pdfBuffer) pdfBuffer = result.pdfBuffer;
       if (!download && !pdfBuffer) {
         await page.waitForTimeout(1500).catch(() => {});
-        pdfBuffer = await recoverPdfFromPrintPages(browser.context);
+        pdfBuffer = await recoverPdfFromPrintPages(context);
         if (pdfBuffer) clicked = true;
       }
       if (!download && !pdfBuffer && controlledDownloadDir) {
@@ -881,7 +894,7 @@ async function runPortal({ portal, cnpj, browser, baseDir, emit }) {
   // um estado terminal, sem clicar em elementos fora do contexto da emissão.
   if (!download && !pdfBuffer) {
     const continuation = await continueIssuanceFlow({
-      page, context: browser.context, browser, portal, baseDir, emit, maxSteps: 8
+      page, context: context, browser, portal, baseDir, emit, maxSteps: 8
     });
     if (continuation.pdfBuffer) pdfBuffer = continuation.pdfBuffer;
     if (continuation.status === 'ESTADO_DESCONHECIDO') {
@@ -890,7 +903,7 @@ async function runPortal({ portal, cnpj, browser, baseDir, emit }) {
   }
 
   if (!download && !pdfBuffer && portal.existingCertificate) {
-    const existing = await captureExistingCertificate(page, browser.context, portal.existingCertificate, emit);
+    const existing = await captureExistingCertificate(page, context, portal.existingCertificate, emit);
     if (existing?.download) download = existing.download;
     if (existing?.pdfBuffer) pdfBuffer = existing.pdfBuffer;
   }
@@ -899,7 +912,7 @@ async function runPortal({ portal, cnpj, browser, baseDir, emit }) {
     if ((portal.downloadButtons || []).length && !controlledDownloadDir) {
       controlledDownloadDir = await prepareControlledDownloadDir(page, baseDir, cnpj, emit, portal.key);
     }
-    const result = await capturePdfFromClick(page, browser.context, portal.downloadButtons || [], 20000);
+    const result = await capturePdfFromClick(page, context, portal.downloadButtons || [], 20000);
     if (result?.download) download = result.download;
     if (result?.pdfBuffer) pdfBuffer = result.pdfBuffer;
     if (!download && !pdfBuffer && controlledDownloadDir) {
@@ -919,7 +932,7 @@ async function runPortal({ portal, cnpj, browser, baseDir, emit }) {
   }
 
   if (!download && !pdfBuffer && portal.provider === 'fisco-web') {
-    pdfBuffer = await recoverPdfFromPrintPages(browser.context);
+    pdfBuffer = await recoverPdfFromPrintPages(context);
     if (pdfBuffer) emit({ type:'pdf_print_route_recovered', portal:portal.key, message:'PDF recuperado da rota oficial de impressão.' });
   }
 
@@ -927,7 +940,7 @@ async function runPortal({ portal, cnpj, browser, baseDir, emit }) {
     pdfBuffer = await waitForPdfNavigation(page, 15000);
   }
   if (!download && !pdfBuffer && ['estadual-ce','estadual-sp'].includes(portal.key)) {
-    pdfBuffer = await printCertificatePageFromContext(browser.context, cnpj, portal.key, 20000);
+    pdfBuffer = await printCertificatePageFromContext(context, cnpj, portal.key, 20000);
     if (pdfBuffer) {
       emit({ type: 'page_printed_to_pdf', portal: portal.key, message: 'PDF gerado a partir da página oficial da certidão.' });
     }
@@ -947,20 +960,20 @@ async function runPortal({ portal, cnpj, browser, baseDir, emit }) {
       catch(error) {
         const recovered = controlledDownloadDir ? await waitForPdfInDirectory(controlledDownloadDir, 20000) : null;
         if (!recovered) throw error;
-        fs.writeFileSync(filePath, recovered.pdfBuffer);
+        checkCancelled();fs.writeFileSync(filePath, recovered.pdfBuffer);
         emit({type:'download_recovered',portal:portal.key,message:'PDF recuperado da pasta controlada desta emissão.'});
       }
     } else {
       if (!looksLikePdf(pdfBuffer)) {
         const recovered = controlledDownloadDir ? await waitForPdfInDirectory(controlledDownloadDir, 10000) : null;
         if (recovered) {
-          fs.writeFileSync(filePath, recovered.pdfBuffer);
+          checkCancelled();fs.writeFileSync(filePath, recovered.pdfBuffer);
           emit({type:'download_recovered',portal:portal.key,message:'PDF recuperado da pasta controlada desta emissão.'});
         } else {
           throw new Error('O portal respondeu ao clique, mas o conteúdo capturado não é um PDF válido.');
         }
       } else {
-        fs.writeFileSync(filePath, pdfBuffer);
+        checkCancelled();fs.writeFileSync(filePath, pdfBuffer);
       }
     }
     const rel = path.relative(path.join(baseDir, 'data'), filePath).split(path.sep).join('/');
@@ -971,7 +984,8 @@ async function runPortal({ portal, cnpj, browser, baseDir, emit }) {
     throw new Error('A certidão não foi capturada em PDF. O portal permanece aberto para conferência.');
   }
 
-  return { filePath };
+  return { filePath, provenance:await evidence.provenance(fs.readFileSync(filePath)) };
+  } finally { evidence.dispose(); context.dispose(); }
 }
 
 module.exports = { runPortal, findSafeContinuation, findMunicipalCertificateService, continueIssuanceFlow };

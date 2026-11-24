@@ -2,7 +2,8 @@
 setlocal
 cd /d "%~dp0"
 chcp 65001 >nul
-echo CENTRAL DE CERTIDOES v2.9.3.11
+echo CENTRAL DE CERTIDOES v2.9.4.4
+echo Pasta desta copia: %CD%
 echo Encerrando uma instancia antiga, se existir...
 for /f "tokens=5" %%p in ('netstat -ano ^| findstr ":3030" ^| findstr "LISTENING"') do taskkill /PID %%p /F >nul 2>nul
 where node >nul 2>nul

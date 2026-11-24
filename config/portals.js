@@ -174,3 +174,4 @@ module.exports = [
     ]
   }
 ];
+module.exports.push({key:'simples',name:'Consulta Optantes — Simples Nacional / SIMEI',shortName:'Simples Nacional',url:'https://consopt.www8.receita.fazenda.gov.br/consultaoptantes',verifyUrl:'https://consopt.www8.receita.fazenda.gov.br/consultaoptantes'});

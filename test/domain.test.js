@@ -40,3 +40,13 @@ test('official origin is exact and HTTPS-only',()=>{
   const p={allowedHosts:['www.tst.jus.br']};assert.equal(trustedUrl('https://www.tst.jus.br/certidao',p),true);
   for(const url of ['https://www.tst.jus.br.attacker.test/x','http://www.tst.jus.br/x','https://x@www.tst.jus.br/x','https://www.tst.jus.br:8443/x']) assert.equal(trustedUrl(url,p),false);
 });
+
+test('municipal positive with negative effects remains identifiable when its body mentions a negative certificate',()=>{
+  const {finalMunicipalDocument}=require('../automation/municipal-print');
+  const body='SECRETARIA MUNICIPAL DAS FINANÇAS CERTIDÃO POSITIVA DE DÉBITOS DE TRIBUTOS MUNICIPAIS\nCOM EFEITO DE NEGATIVA Certidão Nº 2026/123456 CNPJ 00.000.000/0001-91 Válida até 04/01/2027 Certificamos que o requerente possui crédito tributário suspenso. Este documento produz os mesmos efeitos da Certidão Negativa de Débitos de Tributos Municipais.';
+  const result=finalMunicipalDocument(body,'00000000000191');
+  assert.equal(result.parsed.classification,'positiva_efeitos_negativa');assert.equal(result.valid,true);
+  assert.equal(finalMunicipalDocument(body,'11222333000181').valid,false);
+  assert.equal(finalMunicipalDocument('Resultado da consulta '+body,'00000000000191').valid,false);
+  assert.equal(parseCertificate(body.replace('COM EFEITO DE NEGATIVA',''),'00000000000191','municipal').classification,'indeterminada');
+});
