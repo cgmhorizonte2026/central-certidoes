@@ -6,6 +6,7 @@ function Show-Message([string]$text){Add-Type -AssemblyName System.Windows.Forms
 function Get-Health {try {$r=Invoke-RestMethod 'http://localhost:3030/api/health' -TimeoutSec 2;if($r.ok -and $r.version){return $r}}catch{};return $null}
 $mutex=$null;$locked=$false
 try {
+ if($env:USERNAME -like 'CodexSandbox*'){throw 'Abra o atalho da Central pelo seu usuario normal do Windows. O ambiente restrito do Codex nao pode gravar os dados da aplicacao.'}
  if($CreateShortcut){
   $desktop=[Environment]::GetFolderPath('Desktop')
   $shell=New-Object -ComObject WScript.Shell
