@@ -734,6 +734,7 @@ async function federalExistingCertificateFlow(page, emit, baseDir, cnpj) {
 }
 
 async function runPortal({ portal, cnpj, browser, baseDir, emit }) {
+  if (portal.key === 'federal') return require('./federalRunner').runFederal({portal,cnpj,browser,baseDir,emit});
   if (portal.key === 'simples') return require('./simplesRunner').runSimples({portal,cnpj,browser,baseDir,emit});
   if (portal.key === 'fgts') return require('./fgtsRunner').runFgts({portal,cnpj,browser,baseDir,emit});
   // Cada portal usa uma única aba e só a abre quando o portal anterior terminou.
