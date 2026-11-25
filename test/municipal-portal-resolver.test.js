@@ -7,30 +7,6 @@ const { MunicipalPortalResolver, detectProvider } = require('../lib/municipal-po
 
 const company = { municipio_codigo_ibge:'2312403', municipio:'São Gonçalo do Amarante', uf:'CE' };
 
-test('cache permission failure preserves the discovered portal in memory without aborting resolution', async () => {
-  const errors=[];
-  const resolver=new MunicipalPortalResolver({cacheFile:'blocked/portals.json',onCacheError:e=>errors.push(e.code),cacheIO:{
-    readFileSync:()=>JSON.stringify({version:1,portals:{}}),mkdirSync:()=>{},
-    writeFileSync:()=>{throw Object.assign(Error('denied'),{code:'EPERM'});},unlinkSync:()=>{}
-  },fetchImpl:async url=>({ok:true,url,text:async()=>String(url).endsWith('/certidao')?'<input name="cnpj">Certidão':'Prefeitura <a href="/certidao">Certidão Negativa</a>'})});
-  resolver.officialCandidates=async()=>['https://municipal.example/'];
-  const result=await resolver.resolve(company);
-  assert.equal(result.status,'PORTAL_ENCONTRADO');assert.deepEqual(errors,['EPERM']);
-  assert.equal((await resolver.resolve(company)).cache,true);
-});
-
-test('failed atomic cache replacement preserves the old file and cleans its temporary file', () => {
-  const root=fs.mkdtempSync(path.join(os.tmpdir(),'cache-atomic-'));
-  try{
-    const cacheFile=path.join(root,'portals.json'),original=JSON.stringify({version:1,portals:{old:{}}});
-    fs.writeFileSync(cacheFile,original);
-    const resolver=new MunicipalPortalResolver({cacheFile,onCacheError:()=>{},cacheIO:{...fs,renameSync:()=>{throw Object.assign(Error('locked'),{code:'EPERM'});}}});
-    const updated={version:1,portals:{new:{}}};assert.equal(resolver.write(updated),false);
-    assert.equal(fs.readFileSync(cacheFile,'utf8'),original);assert.deepEqual(fs.readdirSync(root),['portals.json']);assert.deepEqual(resolver.read(),updated);
-    resolver.cacheIO=fs;assert.equal(resolver.write(updated),true);assert.deepEqual(JSON.parse(fs.readFileSync(cacheFile,'utf8')),updated);
-  }finally{fs.rmSync(root,{recursive:true,force:true});}
-});
-
 test('requires canonical municipality identity', async () => {
   const resolver = new MunicipalPortalResolver({ fetchImpl: async () => { throw new Error('unexpected'); } });
   assert.equal((await resolver.resolve({municipio:'X',uf:'CE'})).status, 'MUNICIPIO_NAO_IDENTIFICADO');

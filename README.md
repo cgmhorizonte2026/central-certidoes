@@ -23,16 +23,11 @@ Execute `npm run test:regression` antes de alterações serem disponibilizadas. 
 
 Esta versão é local, para Windows com Node.js e Google Chrome. Não está preparada para exposição pública à internet ou múltiplos usuários simultâneos.
 
-## Instalação e atalho no Windows
-
-1. Instale Node.js LTS com npm e Google Chrome.
-2. Baixe o ZIP e extraia todo o conteúdo para uma pasta permanente.
-3. Execute `CRIAR-ATALHO.bat` uma vez para criar o atalho na área de trabalho.
-4. Abra o atalho **Central de Certidoes Horizonte**. A primeira execução instala as dependências, se necessário, e exige internet.
-
-O iniciador abre o navegador automaticamente e mantém o servidor em segundo plano, sem janela de CMD. Abrir novamente reutiliza o servidor ativo; não encerra consultas em andamento. Também é possível abrir diretamente `ABRIR-CENTRAL.vbs` ou `INICIAR-CENTRAL.bat`.
-
-Fechar a aba não encerra o servidor. Após reiniciar o Windows, abra novamente o atalho. Se mover a pasta, recrie o atalho. Diagnósticos de inicialização ficam em `.runtime`. Consulte também `LEIA-ME-PRIMEIRO.txt`.
+## Instalação
+1. Encerre o servidor antigo sem apagar sua pasta.
+2. Extraia este ZIP em uma nova pasta e execute INICIAR-CENTRAL.bat. Na primeira execução, o iniciador instala as dependências npm caso necessário.
+3. Abra http://localhost:3030 no MESMO navegador e endereço usados anteriormente; o histórico e as conferências existentes são vinculados à origem do navegador.
+4. Informe o CNPJ. Consultar carrega os registros; Iniciar consultas mantém a automação existente.
 
 PDFs permanentes continuam em %LOCALAPPDATA%\CentralCertidoes, ou no caminho configurado em CENTRAL_CERTIDOES_STORAGE. Este pacote não contém PDFs de empresas, dados reais nem perfil do navegador.
 
