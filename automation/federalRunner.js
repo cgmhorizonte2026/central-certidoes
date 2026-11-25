@@ -24,7 +24,7 @@ async function unobstructed(control) {
 async function runFederal({ portal, cnpj, browser, baseDir, emit, timing = {} }) {
   const page = await browser.newPortalPage();
   const listeners = [], pending = new Set(), seen = new Set(), queue = [];
-  let disposed = false, actionAt = Date.now(), filled = false, submitted = false;
+  let disposed = false, actionAt = Date.now(), filled = false, submitted = false, formPrepared = false;
   const actions = new Set();
   const state = { actions, filled: false }; // Existing-certificate decisions remain shared.
   const listen = (p, event, fn) => { p.on(event, fn); listeners.push(() => p.off(event, fn)); };
@@ -106,7 +106,11 @@ async function runFederal({ portal, cnpj, browser, baseDir, emit, timing = {} })
       if (/informa(?:ç|c)[õo]es dispon[ií]veis.*insuficientes para emitir|dados.*insuficientes para emitir a certid[aã]o/i.test(body))
         throw Error('A Receita Federal informou que os dados são insuficientes para emissão pela Internet.');
       if (/Mensagem de Erro|Não foi possível concluir|Serviço (?:temporariamente )?indisponível|\b(?:105|106)\s*-\s*\d{2}\//i.test(body)) {
-        await pause('O portal apresentou um erro ou uma verificação de segurança. Nenhuma nova emissão será disparada automaticamente.'); continue;
+        const dialogText = (await page.locator('[role="dialog"]:visible,dialog[open]:visible').allTextContents()).join(' ');
+        const detail = require('./federal-support').safeLog(dialogText || body.match(/(?:Mensagem de Erro|Não foi possível concluir)[^\n]*/i)?.[0] || 'Erro sem texto disponível', cnpj).slice(0, 800);
+        const code = detail.match(/\b(?:023|016|105|106)\b/)?.[0] || '';
+        emit({ type: 'federal_portal_error', portal: 'federal', code, message: detail });
+        await pause(`O portal apresentou um erro ou uma verificação de segurança${code ? ' (código ' + code + ')' : ''}. Nenhuma nova emissão será disparada automaticamente.`); continue;
       }
       const cookies = page.locator('#card0').filter({ hasText: /utilizamos cookies/i });
       if (await cookies.isVisible().catch(() => false)) {
@@ -131,9 +135,21 @@ async function runFederal({ portal, cnpj, browser, baseDir, emit, timing = {} })
         } else if (!submitted) {
           const field = page.locator('input[name="niContribuinte"]');
           if (await unobstructed(field)) {
+            if (!formPrepared) {
+              const ready = await browser.abortable(require('./federal-readiness').waitForFederalForm(
+                { page, status: 'running' }, emit, timing.readiness || {}));
+              checkCancelled();
+              if (!ready) { await pause('O formulário ainda não estabilizou para iniciar a emissão.'); continue; }
+              formPrepared = true; actionAt = Date.now();
+              continue; // Recheck overlays after waiting, before touching the form.
+            }
             if (!filled) {
-              await field.fill(cnpj.replace(/^(\d{2})(\d{3})(\d{3})(\d{4})(\d{2})$/, '$1.$2.$3/$4-$5'));
+              await field.click({ timeout: 1500 });
+              await field.press('Control+A');
+              await field.press('Backspace');
+              await field.pressSequentially(cnpj.replace(/^(\d{2})(\d{3})(\d{3})(\d{4})(\d{2})$/, '$1.$2.$3/$4-$5'), { delay: 25, timeout: 10000 });
               await field.press('Tab');
+              await browser.abortable(new Promise(resolve => setTimeout(resolve, timing.fieldSettleMs ?? 1200)));
               filled = (await field.inputValue()).replace(/\D/g, '') === cnpj;
             }
             if (filled) submitted = await clickOnce(page.getByRole('button', { name: /^Emitir(?: Certidão)?$/i }), 'emit');

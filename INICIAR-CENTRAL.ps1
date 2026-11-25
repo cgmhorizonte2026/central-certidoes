@@ -22,9 +22,15 @@ try {
  $mutex=New-Object System.Threading.Mutex($false,'Local\CentralCertidoesHorizonteLauncher')
  try {$locked=$mutex.WaitOne(120000)}catch [System.Threading.AbandonedMutexException]{$locked=$true}
  if(!$locked){throw 'A Central ainda esta iniciando. Aguarde e tente novamente.'}
- if(!(Get-Health)){
-  $node=(Get-Command node.exe -ErrorAction SilentlyContinue).Source
-  if(!$node){throw 'Instale o Node.js LTS (https://nodejs.org/) e tente novamente.'}
+ $node=(Get-Command node.exe -ErrorAction SilentlyContinue).Source
+ if(!$node){throw 'Instale o Node.js LTS (https://nodejs.org/) e tente novamente.'}
+ $expected=& $node (Join-Path $root 'lib\runtime-identity.js') | ConvertFrom-Json
+ if($LASTEXITCODE -ne 0 -or !$expected.buildId){throw 'Nao foi possivel identificar esta instalacao. Extraia o pacote completo novamente.'}
+ $health=Get-Health
+ if($health -and ($health.appId -ne $expected.appId -or $health.buildId -ne $expected.buildId -or $health.installationId -ne $expected.installationId)){
+  throw 'Existe uma Central antiga ou de outra pasta em execucao. Finalize as consultas, reinicie o Windows e abra o atalho desta pasta. Atualizar a aba nao atualiza o servidor.'
+ }
+ if(!$health){
   $listener=Get-NetTCPConnection -LocalPort 3030 -State Listen -ErrorAction SilentlyContinue
   if($listener){throw 'A porta 3030 esta ocupada por outro servico. Nenhum processo foi encerrado.'}
   New-Item -ItemType Directory -Path $runtime -Force | Out-Null

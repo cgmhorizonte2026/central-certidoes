@@ -127,7 +127,9 @@ function fileUrlForPath(filePath) {
   return '/files/' + rel;
 }
 
-app.get('/api/health', (_, res) => res.json({ ok: true, version: require('./package.json').version }));
+// Freeze at startup: changes on disk must not masquerade as loaded server code.
+const runtimeIdentity = require('./lib/runtime-identity').runtimeIdentity();
+app.get('/api/health', (_, res) => res.json({ ok: true, version: require('./package.json').version, ...runtimeIdentity }));
 app.get('/api/portals', (_, res) => res.json(portals));
 
 const cnpjCache = new Map();

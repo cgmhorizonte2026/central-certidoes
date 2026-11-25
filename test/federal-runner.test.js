@@ -26,7 +26,7 @@ async function fixture(t, html, manual, json = false, pdfText = '<h1>Receita Fed
       const wake = wakeOnPdf ? new Promise(resolve => resume = resolve) : Promise.resolve();
       await manual(page, message); await wake;
     } };
-  const result = await runFederal({ portal: { key: 'federal', name: 'Federal', url }, cnpj, browser: manager, baseDir: root, emit: () => {}, timing: { responseMs: 2000, pollMs: 50 } });
+  const result = await runFederal({ portal: { key: 'federal', name: 'Federal', url }, cnpj, browser: manager, baseDir: root, emit: () => {}, timing: { responseMs: 2000, pollMs: 50, readiness: { minimum: 300, quiet: 100, deadline: 2000 } } });
   assert.equal(result.provenance.officialPortal, true);
   assert.deepEqual(fs.readFileSync(result.filePath), pdf);
   return { page, waits, result };
@@ -35,6 +35,12 @@ const form = '<input name="niContribuinte"><button onclick="window.emissions=(wi
 test('federal captures an immediate JSON PDF on the first click, without duplicate issuance', async t => {
   const { page, waits } = await fixture(t, form, null, true);
   assert.equal(await page.evaluate(() => window.emissions), 1); assert.equal(waits, 0);
+});
+test('federal preserves keyboard events required by the CNPJ mask before submission', async t => {
+  const html = form.replace('name="niContribuinte"', 'name="niContribuinte" onkeydown="window.keyEvents=(window.keyEvents||0)+1"');
+  const { page } = await fixture(t, html, null, true);
+  assert.ok(await page.evaluate(() => window.keyEvents >= 18));
+  assert.equal(await page.locator('input').inputValue(), '00.000.000/0001-91');
 });
 test('federal does not click or scroll behind an unknown modal; captures manual download', async t => {
   const { page, waits } = await fixture(t, form + '<div role="dialog" style="position:fixed;inset:0;background:white">Confirmação não reconhecida<button onclick="location.href=\'/pdf\'">Baixar manualmente</button></div>',
