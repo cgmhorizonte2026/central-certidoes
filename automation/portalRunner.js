@@ -1,6 +1,7 @@
 const { checkCancelled } = require('./cancellation');
 const fs = require('fs');
 const path = require('path');
+const { recordPageCapture } = require('./capture-provenance');
 
 function onlyDigits(v) { return String(v || '').replace(/\D/g, ''); }
 
@@ -209,7 +210,7 @@ async function capturePdfFromClick(page, context, selectors, timeout = 30000) {
           try {
             const response = await fetch(printPage.url(), { signal: AbortSignal.timeout(12000) });
             const body = Buffer.from(await response.arrayBuffer());
-            if (response.ok && looksLikePdf(body)) return { download: null, page: printPage, pdfBuffer: body };
+            if (response.ok && looksLikePdf(body)) { recordPageCapture(printPage,body,response.url,'official_response');return { download: null, page: printPage, pdfBuffer: body }; }
           } catch (_) {}
         }
         await page.waitForTimeout(250).catch(() => {});
@@ -259,7 +260,7 @@ async function capturePdfFromClick(page, context, selectors, timeout = 30000) {
           try {
             const response = await fetch(candidate.url(), { signal: AbortSignal.timeout(12000) });
             const body = Buffer.from(await response.arrayBuffer());
-            if (response.ok && looksLikePdf(body)) return { download: null, page: candidate, pdfBuffer: body };
+            if (response.ok && looksLikePdf(body)) { recordPageCapture(candidate,body,response.url,'official_response');return { download: null, page: candidate, pdfBuffer: body }; }
           } catch (_) {}
         }
       }
@@ -305,7 +306,7 @@ async function extractPdfResponse(page, timeout = 12000) {
       const response = await page.request.get(url, { timeout });
       const ct = String(response.headers()['content-type'] || '').toLowerCase();
       const body = await response.body();
-      if (ct.includes('pdf') || looksLikePdf(body)) return body;
+      if (ct.includes('pdf') || looksLikePdf(body)) { recordPageCapture(page,body,response.url(),'official_response');return body; }
     } catch (_) {}
   }
   return null;
@@ -318,7 +319,7 @@ async function recoverPdfFromPrintPages(context, timeout = 12000) {
     try {
       const response = await fetch(url, { signal: AbortSignal.timeout(timeout) });
       const body = Buffer.from(await response.arrayBuffer());
-      if (response.ok && looksLikePdf(body)) return body;
+      if (response.ok && looksLikePdf(body)) { recordPageCapture(candidate,body,response.url,'official_response');return body; }
     } catch (_) {}
   }
   return null;
@@ -448,7 +449,7 @@ async function waitForPdfNavigation(page, timeout = 20000) {
       try {
         const response = await page.request.get(page.url(), { timeout: 10000 });
         const ct = response.headers()['content-type'] || '';
-        if (ct.includes('pdf')) return await response.body();
+        if (ct.includes('pdf')) { const bytes=await response.body();recordPageCapture(page,bytes,response.url(),'official_response');return bytes; }
       } catch (_) {}
     }
     await page.waitForTimeout(500);
@@ -457,6 +458,7 @@ async function waitForPdfNavigation(page, timeout = 20000) {
 }
 
 async function printPageToPdf(page) {
+  const sourceUrl=page.url();
   const cdp = await page.context().newCDPSession(page);
   try {
     const result = await cdp.send('Page.printToPDF', {
@@ -466,6 +468,7 @@ async function printPageToPdf(page) {
       paperHeight: 11.69
     });
     const pdf = Buffer.from(result.data, 'base64');
+    if (looksLikePdf(pdf) && page.url()===sourceUrl) recordPageCapture(page,pdf,sourceUrl,'official_print_view');
     return looksLikePdf(pdf) ? pdf : null;
   } finally {
     await cdp.detach().catch(() => {});
@@ -956,11 +959,12 @@ async function runPortal({ portal, cnpj, browser, baseDir, emit }) {
     if (download) {
       // Não confia no nome/extensão sugeridos pelo portal. O arquivo é salvo
       // temporariamente, validado pelo cabeçalho %PDF- e então recebe .pdf.
-      try { await saveDownloadAsPdf(download, filePath); }
+      try { await saveDownloadAsPdf(download, filePath); recordPageCapture(page,fs.readFileSync(filePath),download.url(),'browser_download'); }
       catch(error) {
         const recovered = controlledDownloadDir ? await waitForPdfInDirectory(controlledDownloadDir, 20000) : null;
         if (!recovered) throw error;
         checkCancelled();fs.writeFileSync(filePath, recovered.pdfBuffer);
+        if (path.basename(recovered.sourcePath) === path.basename(download.suggestedFilename())) recordPageCapture(page,recovered.pdfBuffer,download.url(),'controlled_download');
         emit({type:'download_recovered',portal:portal.key,message:'PDF recuperado da pasta controlada desta emissão.'});
       }
     } else {
