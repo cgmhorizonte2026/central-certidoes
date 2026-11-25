@@ -1,4 +1,5 @@
 const basePortals = require('./portals');
+const { consultationOrder } = require('../lib/consultation-policy');
 const { states, municipal } = require('./registry');
 
 const normalize = value => String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
@@ -54,7 +55,7 @@ function discoveredMunicipalPortal(company, record) {
 }
 
 function portalsForCompany(company) {
-  return [...basePortals.filter(portal => !portal.key.startsWith('estadual-')), statePortal(company), municipalPortal(company)].filter(Boolean);
+  return consultationOrder([...basePortals.filter(portal => !portal.key.startsWith('estadual-')), statePortal(company), municipalPortal(company)].filter(Boolean));
 }
 
 function portalForCertificate(company, certificateKey) {
@@ -65,7 +66,7 @@ async function resolvePortalsForCompany(company,{municipalResolver}={}){
   const known=municipalPortal(company);let municipalResolved=null,resolution={status:'PORTAL_EM_DESCOBERTA'};
   if(municipalResolver){resolution=await municipalResolver.resolve(company);municipalResolved=discoveredMunicipalPortal(company,resolution);}
   if(!municipalResolved&&known){municipalResolved=known;resolution={...resolution,status:'PORTAL_ENCONTRADO',provider:'registry',certidao_url:known.url,fonte:'cadastro legado',confianca:'cadastro_legado'};}
-  return {portals:[...basePortals.filter(portal=>!portal.key.startsWith('estadual-')),statePortal(company),municipalResolved].filter(Boolean),municipalResolution:resolution};
+  return {portals:consultationOrder([...basePortals.filter(portal=>!portal.key.startsWith('estadual-')),statePortal(company),municipalResolved].filter(Boolean)),municipalResolution:resolution};
 }
 
 module.exports = { portalsForCompany, portalForCertificate, resolvePortalsForCompany, discoveredMunicipalPortal, statePortal, municipalPortal };

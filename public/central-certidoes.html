@@ -1121,14 +1121,25 @@ window.addEventListener('DOMContentLoaded',()=>{
   function log(msg){ const el=$('v2Log'); el.textContent += `[${new Date().toLocaleTimeString()}] ${msg}\n`; el.scrollTop=el.scrollHeight; }
   function renderSteps(names){ $('v2Steps').innerHTML=''; names.forEach(p=>{ const d=document.createElement('div'); d.className='v2-step'; d.id='v2-'+p.key; d.innerHTML=`<b>${p.name}</b><small>Aguardando</small>`; $('v2Steps').appendChild(d); steps[p.key]=d; }); }
   function step(key,status){ const d=steps[key]; if(!d)return; const sm=d.querySelector('small'); sm.textContent=status; d.style.borderColor = status.includes('concl')?'#22c55e':status.includes('CAPTCHA')?'#f59e0b':'#ddd8c9'; }
-  async function api(url,opt={}){ const r=await fetch(url,{headers:{'Content-Type':'application/json'},...opt}); const j=await r.json(); if(!r.ok)throw new Error(j.error||'Erro'); return j; }
+  async function api(url,opt={}){ const r=await fetch(url,{headers:{'Content-Type':'application/json'},...opt}); const j=await r.json(); if(!r.ok)throw Object.assign(new Error(j.error||'Erro'),{code:j.code}); return j; }
   async function startConsultation(certificateKey=''){
     const cnpj=digits($('cnpj')?.value); if(cnpj.length!==14){alert('Informe um CNPJ válido com 14 dígitos.');return;}
     if($('btnConsultarTodas').disabled)return;
     clearInterval(poll);sessionId=crypto.randomUUID();municipalActive=false;
     const startingId=sessionId;
     $('btnConsultarTodas').disabled=true; $('btnParar').disabled=false; $('btnContinuar').disabled=true; $('v2Human').classList.add('v2-hidden'); $('v2Log').textContent='';
-    try{ const data=await api('/api/session',{method:'POST',body:JSON.stringify({cnpj,razaoSocial:$('razaoSocial')?.value||'',certificateKey,sessionId:startingId})}); if(sessionId!==startingId)return; sessionId=data.sessionId; renderSteps(data.portals); log((certificateKey?'Consulta individual':'Consulta completa')+' iniciada: '+sessionId); poll=setInterval(refresh,800); refresh(); }catch(e){if(sessionId!==startingId)return;alert(e.message);sessionId=null; $('btnConsultarTodas').disabled=false; $('btnParar').disabled=true;}
+    try{
+      const request={cnpj,razaoSocial:$('razaoSocial')?.value||'',certificateKey,sessionId:startingId};
+      let data;
+      try { data=await api('/api/session',{method:'POST',body:JSON.stringify(request)}); }
+      catch(e){
+        if(sessionId!==startingId)return;
+        if(e.code!=='VALID_CERTIFICATE_CONFIRMATION')throw e;
+        if(!window.confirm(e.message)){sessionId=null;$('btnConsultarTodas').disabled=false;$('btnParar').disabled=true;return;}
+        data=await api('/api/session',{method:'POST',body:JSON.stringify({...request,confirmValidCertificate:true})});
+      }
+      if(sessionId!==startingId)return; sessionId=data.sessionId; renderSteps(data.portals); log((certificateKey?'Consulta individual':'Consulta completa')+' iniciada: '+sessionId); poll=setInterval(refresh,800); refresh();
+    }catch(e){if(sessionId!==startingId)return;alert(e.message);sessionId=null; $('btnConsultarTodas').disabled=false; $('btnParar').disabled=true;}
   }
   $('btnConsultarTodas').onclick=()=>startConsultation();
   window.startSingleCertificate=startConsultation;

@@ -10,7 +10,7 @@
     "test:municipal": "node --test test/municipal-learning.test.js test/municipal-storage.test.js test/portal-resolver-v293.test.js test/domain.test.js",
     "test:stop": "node --test test/session-stop.test.js",
     "test:print": "node --test test/municipal-print.test.js",
-    "test:regression": "node --test test/domain.test.js test/capture-provenance.test.js test/portal-isolation.test.js test/portal-continuation.test.js test/portal-resolver-v293.test.js test/municipal-portal-resolver.test.js test/municipal-layout.test.js test/municipal-learning.test.js test/municipal-print.test.js test/municipal-storage.test.js test/session-stop.test.js test/portal-regressions.test.js test/simples.test.js test/certificate-identifiers.test.js test/simples-review.test.js"
+    "test:regression": "node --test test/consultation-policy.test.js test/domain.test.js test/capture-provenance.test.js test/portal-isolation.test.js test/portal-continuation.test.js test/portal-resolver-v293.test.js test/municipal-portal-resolver.test.js test/municipal-layout.test.js test/municipal-learning.test.js test/municipal-print.test.js test/municipal-storage.test.js test/session-stop.test.js test/portal-regressions.test.js test/simples.test.js test/certificate-identifiers.test.js test/simples-review.test.js"
   },
   "dependencies": {
     "express": "^4.22.3",

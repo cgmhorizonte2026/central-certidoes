@@ -48,7 +48,7 @@ const { SessionControl } = require('./automation/session-control');
 const sessionControl = new SessionControl(sessions, emit);
 const municipalTasks = sessionControl.tasks;
 const {DOCUMENT_POLICY}=require('./automation/municipal-print');
-const { MunicipalLearning, readFlow, flowKey } = require('./automation/municipal-learning');
+const { MunicipalLearning } = require('./automation/municipal-learning');
 const sessionServices = {lookupCompany:cnpj=>lookupCompany(cnpj),resolvePortals:company=>resolvePortalsForCompany(company,{municipalResolver:municipalPortalResolver}),createBrowser:emit=>new BrowserManager(emit),runPortal};
 
 function log(sessionId, event) {
@@ -308,14 +308,18 @@ function todayIso() {
   return new Date().toISOString().slice(0, 10);
 }
 
-function isCertificateCurrent(cert) {
-  if (!cert?.filePath || !fs.existsSync(cert.filePath)) return false;
-  if (!cert.validade) return false;
-  const raw = String(cert.validade).trim();
-  const normalized = /^\d{4}-\d{2}-\d{2}$/.test(raw)
-    ? raw
-    : (raw.match(/^(\d{2})[\/-](\d{2})[\/-](\d{4})$/) || []).slice(1).reverse().join('-');
-  return /^\d{4}-\d{2}-\d{2}$/.test(normalized) && normalized >= todayIso();
+async function reusableCertificate(cnpj, key, cert) {
+  if (key === 'simples' || !cert?.filePath || !fs.existsSync(cert.filePath)) return null;
+  // Preserve the existing protection against a Caixa summary saved as CRF.
+  if (key === 'fgts' && cert.source !== 'manual' && cert.captureStage !== 'fgts-print-view') return null;
+  const days = require('./lib/consultation-policy').remainingDays(cert.validade);
+  if (!(days > 5)) return null;
+  try {
+    const bytes = fs.readFileSync(cert.filePath);
+    require('./lib/capture-validation').validateCapture((await require('./lib/certificates').extractPdf(bytes)).text, cnpj, key);
+    if (cert.sha256 && require('./automation/capture-provenance').hash(bytes) !== cert.sha256) return null;
+    return { days, cert };
+  } catch { return null; }
 }
 
 function reuseEventForCertificate(portal, cert) {
@@ -370,6 +374,12 @@ app.get('/api/cnpj/:cnpj', async (req, res) => {
 
 app.post('/api/session', async (req, res) => {
   const cnpj = onlyDigits(req.body.cnpj);
+  const requestedCertificate = String(req.body.certificateKey || '');
+  if (cnpj.length === 14 && requestedCertificate && req.body.confirmValidCertificate !== true) {
+    const reusable = await reusableCertificate(cnpj, requestedCertificate, readArchive(cnpj).certificates?.[requestedCertificate]);
+    if (reusable) return res.status(409).json({ code: 'VALID_CERTIFICATE_CONFIRMATION', remainingDays: reusable.days,
+      error: `Esta certidão ainda tem validade por mais ${reusable.days} dias. Deseja realizar uma nova consulta mesmo assim?` });
+  }
   if (cnpj.length !== 14) return res.status(400).json({ error: 'CNPJ deve conter 14 dígitos.' });
   if (sessionControl.activeId) {
     const active = sessions.get(sessionControl.activeId);
@@ -396,6 +406,7 @@ app.post('/api/session', async (req, res) => {
     cnpj,
     razaoSocial: req.body.razaoSocial || company.razao_social || '',
     company,
+    individualConsultation: Boolean(requestedCertificate),
     status: 'running',
     startedAt: new Date().toISOString(),
     events: []
@@ -497,16 +508,15 @@ async function runSession(id) {
     emit(id, { type: 'portal_start', portal: portal.key, name: portal.name });
     const archiveKey = archiveKeyForPortal(portal.key);
     const existing = archive.certificates?.[archiveKey];
-    const municipalityLearned = portal.key !== 'municipal' || (existing?.documentValidation===DOCUMENT_POLICY && !!readFlow(STORAGE_ROOT,flowKey(s.company,portal.url)));
-    let existingMatches=false;
-    if(existing?.filePath&&fs.existsSync(existing.filePath)){try{const bytes=fs.readFileSync(existing.filePath);require('./lib/capture-validation').validateCapture((await pdfParse(bytes)).text,s.cnpj,portal.key);existingMatches=!existing.sha256||require('./automation/capture-provenance').hash(bytes)===existing.sha256;}catch(error){emit(id,{type:'archive_rejected',portal:portal.key,message:error.message});}}
-    if (portal.key !== 'simples' && existingMatches && municipalityLearned && isCertificateCurrent(existing) && (portal.key !== 'fgts' || existing.source === 'manual' || existing.captureStage === 'fgts-print-view')) {
+    const reusable = !s.individualConsultation && await reusableCertificate(s.cnpj, portal.key, existing);
+    if (s.status === 'stopped') break;
+    if (reusable) {
       emit(id, {
         type: 'portal_reused',
         portal: portal.key,
         name: portal.name,
         validade: existing.validade,
-        message: `${portal.name} já está válida no arquivo até ${existing.validade}.`
+        message: `${portal.name} reutilizada: ainda válida por mais ${reusable.days} dias, até ${existing.validade}.`
       });
       emit(id, { type: 'portal_done', portal: portal.key, filePath: existing.filePath, fileUrl: existing.fileUrl, reused: true });
       emit(id, reuseEventForCertificate(portal, existing));

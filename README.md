@@ -12,6 +12,8 @@ A versão 2.9.4.4 corrige a rejeição de certidões positivas com efeito de neg
 
 ## Versão oficial 2.9.4.4
 
+A consulta completa executa Federal, FGTS, Trabalhista, Estadual, Municipal e, por último, Simples Nacional. Certidões arquivadas com mais de cinco dias de validade são reutilizadas após conferir o PDF, CNPJ, órgão e integridade. Com cinco dias ou menos, a consulta é executada novamente. Na consulta individual, uma certidão com mais de cinco dias exige confirmação, informando os dias restantes; confirmar inicia uma nova consulta. Essa regra não trata o comprovante do Simples como certidão.
+
 - Consulta de optantes do Simples Nacional e SIMEI, com comprovante PDF e prazo interno de reconsulta de 30 dias.
 - Relatório de uma página com identidade visual de Horizonte, tabela separada para Simples/SIMEI e identificação da origem dos documentos.
 - Número da certidão e código de verificação extraídos separadamente. Campos ausentes ou ambíguos exigem conferência.
