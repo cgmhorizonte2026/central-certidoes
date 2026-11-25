@@ -1,0 +1,19 @@
+CENTRAL DE CERTIDOES HORIZONTE - PRIMEIRO ACESSO
+
+1. Instale Node.js LTS (com npm): https://nodejs.org/
+2. Instale Google Chrome: https://www.google.com/chrome/
+3. Extraia TODO o ZIP para uma pasta permanente. Nao execute dentro do ZIP.
+4. Execute CRIAR-ATALHO.bat uma vez.
+5. Abra o atalho Central de Certidoes Horizonte na area de trabalho.
+
+A Central inicia em segundo plano e abre http://localhost:3030 automaticamente.
+Na primeira abertura precisa de internet para instalar as dependencias; aguarde.
+Nao precisa manter o CMD aberto. Ao clicar novamente, reutiliza a Central ja ativa.
+Fechar a aba nao encerra o servidor. Ao desligar o Windows ele encerra;
+no proximo uso, abra o atalho novamente. O programa nao inicia com o Windows.
+
+Nao mova nem apague a pasta depois de criar o atalho. Se mover, recrie o atalho.
+Os PDFs ficam em %LOCALAPPDATA%\CentralCertidoes (ou CENTRAL_CERTIDOES_STORAGE).
+Cada computador possui seus proprios documentos e historico.
+Erros de inicializacao ficam na pasta .runtime dentro da pasta do programa.
+O Chrome das consultas continua visivel para CAPTCHA e intervencoes manuais.
