@@ -75,7 +75,7 @@ function parseCert(text) {
   const upper = raw.toUpperCase().replace(/\s+/g, ' ');
 
   let status = '';
-  if (/POSITIVA\s+COM\s+EFEITOS?\s+DE\s+NEGATIVA/.test(upper)) {
+  if (/POSITIVA\s+COM\s+EFEITOS?\s+(?:DE\s+)?NEGATIV[AO]\b/.test(upper)) {
     status = 'positiva_efeito_negativa';
   } else if (/CERTID[ÃA]O\s+NEGATIVA/.test(upper) || /\bNEGATIVA\b/.test(upper)) {
     status = 'negativa';
