@@ -1,0 +1,23 @@
+INICIALIZADOR SIMPLES — BASE MAIN 0398354
+
+Uso diario: clique em Central de Certidoes na Area de Trabalho.
+O servidor inicia sem janela de CMD e a pagina abre automaticamente no navegador padrao, em http://localhost:3030.
+Cliques seguintes reaproveitam o servidor desta mesma pasta. Fechar o navegador NAO encerra o servidor; ele permanece ativo ate sair da conta/reiniciar o Windows ou ser encerrado pela TI.
+Antes de fechar uma consulta em andamento, use Parar. Este ajuste nao adiciona recuperacao de sessao nem modifica emissoes.
+
+Preparacao em outra maquina:
+1. Instalar Node.js LTS e Google Chrome, como exigido pelo sistema atual.
+2. Manter esta pasta em um local definitivo com permissao de escrita.
+3. Executar PREPARAR-CENTRAL.cmd uma vez: instala as dependencias do lockfile e cria o atalho.
+Se as dependencias ja estiverem instaladas, basta executar Criar-Atalho.vbs.
+Na utilizacao diaria, somente o atalho. INICIAR-CENTRAL.bat e Iniciar-Central.cmd tambem delegam a abertura oculta.
+
+O inicializador usa Windows Script Host e Node.js; nao executa scripts PowerShell nem altera politicas do Windows. Se o Windows Script Host estiver indisponivel ou bloqueado pela organizacao, a TI deve avaliar uma alternativa autorizada. Nao desabilitar protecoes.
+Se houver uma Central antiga aberta no terminal, encerre-a nesse terminal antes da primeira abertura pelo novo atalho. Processo desconhecido na porta gera mensagem; o inicializador nao mata nenhum processo.
+
+Dados permanentes permanecem no armazenamento original do sistema (%LOCALAPPDATA%\CentralCertidoes ou CENTRAL_CERTIDOES_STORAGE). Historico da interface permanece na mesma origem localhost e depende de usar o mesmo navegador/perfil. Uma copia em outra pasta tem seu proprio diretorio data de perfil de automacao; o inicializador nao copia nem apaga perfis existentes.
+Logs: .runtime\inicializador\servidor.log e inicializador.log.
+Nao mover a pasta depois de criar o atalho; se mover, executar Criar-Atalho.vbs novamente.
+
+Escopo: somente inicializacao, preparacao e atalho. server.js, interface, automacoes, documentos, dependencias declaradas e lockfile sao identicos a main 0398354.
+Validacao: teste nativo Windows em porta/pasta temporarias, inicio oculto pelo VBS, processo sobrevivendo ao inicializador, reutilizacao com cliques simultaneos e recusa de porta ocupada por terceiro. Nenhuma emissao real foi executada nesse teste.

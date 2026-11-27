@@ -26,11 +26,12 @@ Execute `npm run test:regression` antes de alterações serem disponibilizadas. 
 Esta versão é local, para Windows com Node.js e Google Chrome. Não está preparada para exposição pública à internet ou múltiplos usuários simultâneos.
 
 ## Instalação
-1. Encerre o servidor antigo sem apagar sua pasta.
-2. Extraia este ZIP em uma nova pasta e execute INICIAR-CENTRAL.bat. Na primeira execução, o iniciador instala as dependências npm caso necessário.
-3. Abra http://localhost:3030 no MESMO navegador e endereço usados anteriormente; o histórico e as conferências existentes são vinculados à origem do navegador.
-4. Informe o CNPJ. Consultar carrega os registros; Iniciar consultas mantém a automação existente.
+1. Encerre a instância antiga no terminal original, sem apagar seus dados.
+2. Mantenha a pasta do sistema no local definitivo e execute `PREPARAR-CENTRAL.cmd` uma vez. Ele instala as dependências e cria o atalho na Área de Trabalho. Se já preparou as dependências, execute apenas `Criar-Atalho.vbs`.
+3. No dia a dia, clique em **Central de Certidoes** na Área de Trabalho. O servidor inicia em segundo plano e o navegador abre automaticamente em `http://localhost:3030`, sem manter CMD aberto.
+4. Use o mesmo navegador/perfil de antes para acessar o histórico. Fechar o navegador mantém o servidor ativo; antes de fechar uma consulta em andamento, use **Parar**.
 
+Veja os requisitos e limites em [Inicializador simples](docs/INICIALIZADOR-SIMPLES.txt).
 PDFs permanentes continuam em %LOCALAPPDATA%\CentralCertidoes, ou no caminho configurado em CENTRAL_CERTIDOES_STORAGE. Este pacote não contém PDFs de empresas, dados reais nem perfil do navegador.
 
 ## Correções
